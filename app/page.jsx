@@ -7,7 +7,7 @@ import {
 } from '../lib/dispatch';
 import {
   loadInitial, saveSettings, pushUpload, pushAssign, loadHistory,
-  pushStatut, flushStatuts, statutsEnAttente,
+  pushStatut, flushStatuts, statutsEnAttente, pushPlanifier,
 } from '../lib/store';
 
 // Statuts terrain. Aujourd'hui posés par le chef ; demain par la remontée WhatsApp.
@@ -116,15 +116,29 @@ export default function Dashboard() {
     }
   }
 
+  // Remet un ticket arbitré dans le dispatch du jour
+  function planifierJob(job) {
+    const refs = job.tickets.map((t) => t.ref);
+    setTickets(tickets.map((t) => (refs.includes(t.ref) ? { ...t, hors_dispatch: false } : t)));
+    pushPlanifier(db, refs, true).catch(() => {});
+  }
+
   // ── Distribution ──────────────────────────────────────────
   const activeTechs = techs.filter((t) => t.active);
+
+  // Tickets déjà renseignés un jour précédent : ils reviennent dans le fichier
+  // mais ne partent pas aux équipes tant que l'orienteur n'a pas tranché.
+  const aArbitrer = useMemo(
+    () => buildJobs(tickets.filter((t) => t.hors_dispatch)),
+    [tickets],
+  );
 
   const perTech = useMemo(() => {
     const map = {};
     for (const t of activeTechs) map[t.name] = [];
     const unassigned = [];
     const byTech = {};
-    for (const t of tickets) {
+    for (const t of tickets.filter((x) => !x.hors_dispatch)) {
       const a = assign[t.ref];
       if (a && map[a] !== undefined) (byTech[a] = byTech[a] || []).push(t);
       else unassigned.push(t);
@@ -225,6 +239,32 @@ export default function Dashboard() {
           </div>
         )}
       </section>
+
+      {/* Arbitrage du matin : tickets déjà renseignés un jour précédent */}
+      {aArbitrer.length > 0 && (
+        <section style={{ ...S.card, borderLeft: '4px solid #B87700' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <h3 style={{ ...S.h3, color: '#B87700', margin: 0 }}>
+              ⚖ À arbitrer ({aArbitrer.length}) — déjà renseignés un jour précédent
+            </h3>
+            <button style={S.btnAdd} onClick={() => aArbitrer.forEach(planifierJob)}>
+              Tout planifier
+            </button>
+          </div>
+          <p style={S.hint}>
+            Ces tickets sont revenus dans le fichier alors qu'ils avaient déjà un statut.
+            Ils sont <strong>exclus du dispatch</strong> et n'apparaissent pas dans les messages WhatsApp
+            envoyés aux équipes. Un ticket déjà fait qui réapparaît attend en général une clôture
+            côté IAM, pas une nouvelle intervention.
+          </p>
+          {aArbitrer.map((job) => (
+            <ArbitrageRow key={job.key} job={job} techs={activeTechs}
+              current={assign[job.tickets[0].ref] || ''}
+              onChange={(v) => reassignJob(job, v)}
+              onPlanifier={() => planifierJob(job)} />
+          ))}
+        </section>
+      )}
 
       {/* Non affectés */}
       {perTech.unassignedTickets.length > 0 && (
@@ -403,6 +443,39 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, onStatut }
           <button style={S.btnLink} onClick={() => setMotifPour(null)}>retour</button>
         </div>
       )}
+    </div>
+  );
+}
+
+// Ticket revenu dans le fichier alors qu'il avait déjà un statut.
+// L'orienteur voit ce qui a été déclaré, par qui et quand, choisit l'équipe,
+// puis décide de le remettre ou non dans la distribution du jour.
+function ArbitrageRow({ job, techs, current, onChange, onPlanifier }) {
+  const t = job.tickets[0];
+  const LIB = { fait: '✅ déclaré fait', pas_acces: "🚪 pas d'accès", reporte: '⏭ reporté' };
+  const jour = t.arbitrage_le ? t.arbitrage_le.split('-').reverse().join('/') : '';
+  return (
+    <div style={{ ...S.job, background: '#FFF8EC', borderLeft: '4px solid #B87700' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: '#0F1B3D' }}>
+            {job.type === 'splitter' ? `⚡ SPLITTER ${job.key} — ${job.tickets.length} clients` : t.ref}
+            {t.days_seen > 1 && <span style={S.repBadge}>↻ {t.days_seen}e jour</span>}
+          </div>
+          <div style={{ fontSize: 12, color: '#B87700', fontWeight: 600 }}>
+            {LIB[t.arbitrage] || t.arbitrage} le {jour}
+            {t.arbitrage_motif ? ` · ${t.arbitrage_motif}` : ''}
+          </div>
+          <div style={{ fontSize: 12, color: '#556' }}>{t.client} · {t.msan}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <select value={current} onChange={(e) => onChange(e.target.value)} style={S.select}>
+            <option value="">— équipe —</option>
+            {techs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}
+          </select>
+          <button style={S.btnSave} onClick={onPlanifier}>Planifier</button>
+        </div>
+      </div>
     </div>
   );
 }

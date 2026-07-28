@@ -4,7 +4,7 @@ import { PGlite } from '@electric-sql/pglite';
 import assert from 'node:assert/strict';
 import {
   useSqlClient, getSettings, saveSettings, saveUpload, getDay, assignTickets, getHistory,
-  setStatut, getAvancement, getEcarts,
+  setStatut, getAvancement, getEcarts, planifier,
 } from '../lib/db.js';
 
 // ── Shim : reproduit l'API tagged-template du driver Neon sur PGlite ──
@@ -209,5 +209,57 @@ assert.equal(ecarts.length, 1, 'un seul écart détecté');
 assert.equal(ecarts[0].ref, 'R100', 'déclaré fait la veille mais toujours présent');
 ok('écart déclaratif / fichier : intervention faite mais non clôturée côté IAM');
 
+
+console.log('\n── Arbitrage du matin ──');
+await saveSettings({
+  chefs: [{ name: 'Soufiane', phone: '212600010013' }],
+  techs: [{ name: 'RACHID', phone: '2126111', active: true, chef: 'Soufiane' },
+          { name: 'RAFIK', phone: '2126222', active: true, chef: 'Soufiane' }],
+  zones: [{ msan: 'MNOC-TAOUZAR', tech: 'RACHID' }, { msan: 'GA-C-COLLINE-1', tech: 'RAFIK' }],
+});
+await saveUpload('2026-09-01', [
+  T('R500', 'MNOC-TAOUZAR', 2.0), T('R501', 'MNOC-TAOUZAR', 1.0), T('R502', 'GA-C-COLLINE-1', 0.5),
+]);
+await setStatut(['R500'], 'fait', { day: '2026-09-01', source: 'whatsapp' });
+await setStatut(['R501'], 'pas_acces', { day: '2026-09-01', motif: 'Client absent', source: 'whatsapp' });
+
+// Le lendemain les trois reviennent dans le fichier
+const arbA = await saveUpload('2026-09-02', [
+  T('R500', 'MNOC-TAOUZAR', 3.0), T('R501', 'MNOC-TAOUZAR', 2.0), T('R502', 'GA-C-COLLINE-1', 1.5),
+]);
+const arbRefs = Object.fromEntries(arbA.tickets.map((t) => [t.ref, t]));
+assert.equal(arbRefs.R500.hors_dispatch, true, 'declare fait hier -> exclu du dispatch');
+assert.equal(arbRefs.R501.hors_dispatch, true, 'motif hier -> exclu aussi');
+assert.equal(arbRefs.R502.hors_dispatch, false, 'jamais renseigne -> dispatch normal');
+assert.equal(arbRefs.R500.arbitrage, 'fait');
+assert.equal(arbRefs.R501.arbitrage, 'pas_acces');
+assert.equal(arbRefs.R501.arbitrage_motif, 'Client absent', 'le motif de la veille est repris');
+assert.equal(arbRefs.R500.arbitrage_le, '2026-09-01', 'date du dernier renseignement');
+assert.equal(arbRefs.R500.assigned_tech, 'RACHID', 'equipe suggeree conservee');
+ok('tickets deja renseignes exclus du dispatch, avec statut, motif et date de la veille');
+
+await planifier(['R500'], '2026-09-02', true);
+const arbB = await getDay('2026-09-02');
+assert.equal(arbB.tickets.find((t) => t.ref === 'R500').hors_dispatch, false, "l'orienteur l'a replanifie");
+assert.equal(arbB.tickets.find((t) => t.ref === 'R501').hors_dispatch, true, 'les autres restent exclus');
+ok('replanification a la main par l orienteur');
+
+// Un ticket renseigne le jour meme ne doit pas etre exclu retroactivement
+await setStatut(['R502'], 'fait', { day: '2026-09-02' });
+const arbC = await getDay('2026-09-02');
+assert.equal(arbC.tickets.find((t) => t.ref === 'R502').hors_dispatch, false);
+ok('un statut pose le jour meme ne sort pas le ticket du dispatch');
+
+// Le surlendemain : R501 revient avec le motif le plus recent
+await setStatut(['R501'], 'reporte', { day: '2026-09-02', motif: 'POC a changer' });
+const arbD = await saveUpload('2026-09-03', [T('R501', 'MNOC-TAOUZAR', 3.0)]);
+const arbR501 = arbD.tickets.find((t) => t.ref === 'R501');
+assert.equal(arbR501.arbitrage, 'reporte');
+assert.equal(arbR501.arbitrage_motif, 'POC a changer', 'c est le dernier motif qui compte, pas le premier');
+assert.equal(arbR501.days_seen, 3);
+ok('c est toujours le dernier statut connu qui est repris');
+
 await pg.close();
-console.log(`\n✅ ${pass} groupes de vérifications passés — la couche base est saine.\n`);
+console.log(`
+✅ ${pass} groupes de vérifications passés — la couche base est saine.
+`);
