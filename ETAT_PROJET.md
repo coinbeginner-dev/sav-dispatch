@@ -36,19 +36,23 @@ ce qui est l'état actuel en prod. Un badge dans l'en-tête indique le mode : �
   vérifications (seed, réglages, dépôt, dédup, clôture, override manuel, technicien désactivé,
   historique, fichier vide, réouverture). **Tous verts.**
 
-## Ce qui reste à faire — 2 actions à faire dans le navigateur
-Les deux nécessitent une acceptation de conditions / une autorisation OAuth, impossible en ligne de commande :
+## Infrastructure en place (28/07/2026)
+- **Base Neon provisionnée** : ressource `sav-dispatch-db` (marketplace Vercel, plan gratuit).
+  `DATABASE_URL` posée sur production / preview / development → l'app est en 🟢 **base connectée**.
+  Schéma créé et réglages par défaut seedés (7 techniciens, 14 MSAN, 1 chef). Vérifié en conditions
+  réelles : upload, déduplication, compteur de jours, clôture — conformes.
+- **Auto-déploiement actif** : le projet Vercel est relié à `coinbeginner-dev/sav-dispatch`,
+  branche de production `main`. **Chaque `git push` déploie automatiquement.** Plus besoin des .bat.
+  *(Le blocage venait de l'app GitHub Vercel qui n'avait accès qu'au dépôt HostReady-Audit ;
+  `sav-dispatch` a été ajouté à sa liste d'accès.)*
 
-1. **Base Neon** — ouvrir https://vercel.com/coinbeginners-projects/~/integrations/accept-terms/neon?source=cli
-   et accepter, puis Claude relance `vercel integration add neon` : `DATABASE_URL` est injectée
-   automatiquement et l'app passe en 🟢 base connectée au déploiement suivant.
-2. **Auto-déploiement GitHub → Vercel** — installer l'app Vercel sur GitHub (https://github.com/apps/vercel)
-   pour le compte `coinbeginner-dev` en donnant accès au repo `sav-dispatch`, puis Vercel →
-   projet sav-dispatch → Settings → Git → Connect. Ensuite chaque `git push` déploie tout seul.
-
-## Prochaines étapes voulues
-3. **V2 WhatsApp** : passer des liens wa.me à l'API WhatsApp Business Cloud (envoi 1-clic).
-4. Étendre au-delà de SAV_MT : feuille **SAV_DFO** (dégroupage), puis NA. Pilote = Haddaouia, cible = autres secteurs.
+## Prochaines étapes (ordre recommandé)
+1. **Feuille SAV_DFO** (dégroupage) : parser et UI déjà en place, seul le mapping de colonnes change. Meilleur rapport valeur/effort.
+2. **Multi-secteur (Anfa)** : ajouter une colonne `secteur` sur `zones` et `techs` + un filtre en tête d'écran. Simple maintenant que la base existe.
+3. **V2 WhatsApp** : API WhatsApp Business Cloud (envoi 1-clic). Le long pole est la vérification Meta
+   (compte Business, numéro dédié, validation des modèles de message) → à lancer en parallèle, très en amont.
+   ⚠️ les modèles imposent un format figé : le récap détaillé par technicien devra être repensé,
+   les liens wa.me restent une bonne solution de repli.
 
 ## Données de référence (dossier parent "Projet SAV IAM")
 - `App SAV FTTH/SAV FTTH 3GCOM (1).ods` : exemple du fichier reçu chaque matin (SAV_MT 112 tickets, SAV_DFO)

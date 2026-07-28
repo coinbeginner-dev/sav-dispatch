@@ -4,3 +4,8 @@ node_modules
 .env*
 DEPLOYER.bat
 REDEPLOYER.bat
+
+# Skills d'agent ajoutees par l'integration Vercel/Neon
+.agents/
+.claude/skills/
+skills-lock.json
