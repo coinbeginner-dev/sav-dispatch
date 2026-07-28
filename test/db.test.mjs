@@ -1,0 +1,162 @@
+// Test de la couche base : exécute le vrai SQL sur un Postgres embarqué (PGlite).
+// Lancer avec : npm run test:db
+import { PGlite } from '@electric-sql/pglite';
+import assert from 'node:assert/strict';
+import {
+  useSqlClient, getSettings, saveSettings, saveUpload, getDay, assignTickets, getHistory,
+} from '../lib/db.js';
+
+// ── Shim : reproduit l'API tagged-template du driver Neon sur PGlite ──
+function makeSql(pg) {
+  const build = (strings, values) => {
+    let text = '';
+    const params = [];
+    strings.forEach((s, i) => {
+      text += s;
+      if (i < values.length) {
+        const v = values[i];
+        if (v && v.__raw) text += v.sql;
+        else { params.push(v); text += `$${params.length}`; }
+      }
+    });
+    return { text, params };
+  };
+  const run = (q) => pg.query(q.text, q.params).then((r) => r.rows);
+  const sql = (strings, ...values) => {
+    const q = build(strings, values);
+    return { ...q, then: (ok, ko) => run(q).then(ok, ko) };  // lazy comme Neon
+  };
+  sql.unsafe = (s) => ({ __raw: true, sql: s });
+  sql.transaction = async (queries) => {
+    await pg.exec('begin');
+    try {
+      const out = [];
+      for (const q of queries) out.push(await run(q));
+      await pg.exec('commit');
+      return out;
+    } catch (e) {
+      await pg.exec('rollback');
+      throw e;
+    }
+  };
+  return sql;
+}
+
+const T = (ref, msan, delai, extra = {}) => ({
+  ref, nd: '05221', client: `CLIENT ${ref}`, msan, msanKey: msan.toUpperCase(),
+  enreg: '20/07 08:00', delai, famille: 'FTTH', contact: '0600', adresse: 'CASA',
+  avancement: '', tranche: delai >= 2 ? 'HD' : 'DD', splitter: null, ...extra,
+});
+
+let pass = 0;
+function ok(label) { pass++; console.log(`  ✓ ${label}`); }
+
+const pg = new PGlite();
+useSqlClient(makeSql(pg));
+
+console.log('\n── Réglages ──');
+const s0 = await getSettings();
+assert.equal(s0.techs.length, 7, 'seed techniciens');
+assert.equal(s0.zones.length, 14, 'seed zones');
+assert.equal(s0.chefs.length, 1, 'seed chefs');
+ok('schéma créé et réglages par défaut seedés');
+
+const s1 = await saveSettings({
+  chefs: [{ name: 'Soufiane', phone: '212600000001' }, { name: 'Issam', phone: '212600000002' }],
+  techs: [
+    { name: 'RACHID', phone: '212611111111', active: true, chef: 'Soufiane' },
+    { name: 'RAFIK', phone: '212622222222', active: true, chef: 'Issam' },
+    { name: 'HAMID', phone: '212633333333', active: true, chef: 'Issam' },
+  ],
+  zones: [
+    { msan: 'MNOC-TAOUZAR', tech: 'RACHID' },
+    { msan: 'GA-C-COLLINE-1', tech: 'RAFIK' },
+    { msan: 'MZIC-Inara4-1', tech: 'HAMID' },
+  ],
+});
+assert.equal(s1.techs.length, 3);
+assert.equal(s1.zones.length, 3);
+assert.equal(s1.chefs.length, 2);
+assert.equal(s1.techs[0].chef, 'Soufiane', 'rattachement chef conservé');
+ok('remplacement complet des réglages (techniciens / zones / chefs)');
+
+console.log('\n── Jour 1 : premier dépôt ──');
+const d1 = await saveUpload('2026-07-20', [
+  T('R001', 'MNOC-TAOUZAR', 3.2),
+  T('R002', 'GA-C-COLLINE-1', 1.4),
+  T('R003', 'MSAN-INCONNU', 0.5),
+  T('R004', 'MZIC-Inara4-1', 2.1, { avancement: 'SPLT TAOUZAR:1-1-14-8 ISOLE', splitter: 'TAOUZAR:1-1-14-8' }),
+]);
+assert.equal(d1.tickets.length, 4);
+assert.equal(d1.assign.R001, 'RACHID', 'affectation par MSAN');
+assert.equal(d1.assign.R002, 'RAFIK');
+assert.equal(d1.assign.R003, null, 'MSAN inconnu → non affecté');
+assert.equal(Object.keys(d1.reports).length, 0, 'aucun report au 1er jour');
+assert.equal(d1.closed, 0);
+assert.equal(d1.tickets.find((t) => t.ref === 'R004').splitter, 'TAOUZAR:1-1-14-8');
+assert.equal(typeof d1.tickets[0].delai, 'number', 'délai renvoyé en nombre');
+ok('4 tickets enregistrés et distribués par MSAN');
+
+console.log('\n── Jour 2 : déduplication + clôture ──');
+const d2 = await saveUpload('2026-07-21', [
+  T('R001', 'MNOC-TAOUZAR', 4.2),
+  T('R003', 'MSAN-INCONNU', 1.5),
+  T('R005', 'GA-C-COLLINE-1', 0.3),
+]);
+assert.equal(d2.tickets.length, 3, 'seuls les tickets du jour sont renvoyés');
+assert.equal(d2.reports.R001, 1, 'R001 déjà vu 1 jour avant');
+assert.equal(d2.reports.R003, 1);
+assert.equal(d2.reports.R005, undefined, 'nouveau ticket : pas de report');
+assert.equal(d2.closed, 2, 'R002 et R004 disparus du fichier → traités');
+assert.equal(d2.tickets.find((t) => t.ref === 'R001').days_seen, 2, 'compteur de jours');
+assert.equal(d2.tickets.find((t) => t.ref === 'R001').delai, 4.2, 'délai mis à jour');
+ok('déduplication par n° de ticket, compteur de jours, clôture des disparus');
+
+console.log('\n── Réaffectation manuelle ──');
+await assignTickets(['R003'], 'HAMID', '2026-07-21');
+const after = await getDay('2026-07-21');
+assert.equal(after.assign.R003, 'HAMID');
+const d3 = await saveUpload('2026-07-22', [
+  T('R001', 'MNOC-TAOUZAR', 5.2),
+  T('R003', 'MSAN-INCONNU', 2.5),
+]);
+assert.equal(d3.assign.R003, 'HAMID', "l'affectation manuelle survit à l'upload suivant");
+assert.equal(d3.assign.R001, 'RACHID', 'affectation automatique recalculée');
+assert.equal(d3.reports.R001, 2, 'R001 vu 2 jours avant');
+ok('réaffectation manuelle mémorisée et non écrasée');
+
+console.log('\n── Technicien désactivé ──');
+await saveSettings({
+  chefs: [{ name: 'Soufiane', phone: '212600000001' }],
+  techs: [
+    { name: 'RACHID', phone: '212611111111', active: false, chef: 'Soufiane' },
+    { name: 'RAFIK', phone: '212622222222', active: true, chef: 'Soufiane' },
+  ],
+  zones: [{ msan: 'MNOC-TAOUZAR', tech: 'RACHID' }, { msan: 'GA-C-COLLINE-1', tech: 'RAFIK' }],
+});
+const d4 = await saveUpload('2026-07-23', [T('R001', 'MNOC-TAOUZAR', 6.2), T('R009', 'GA-C-COLLINE-1', 0.2)]);
+assert.equal(d4.assign.R001, null, 'technicien inactif → ticket non affecté');
+assert.equal(d4.assign.R009, 'RAFIK');
+ok('un technicien désactivé ne reçoit plus de tickets');
+
+console.log('\n── Historique ──');
+const h = await getHistory();
+assert.equal(h.days.length, 4, '4 journées enregistrées');
+assert.equal(h.days[0].day, '2026-07-23', 'tri du plus récent au plus ancien');
+assert.equal(h.days[0].total, 2);
+assert.equal(h.totaux.total, 6, 'R001..R005 + R009');
+const r001 = h.vieux.find((t) => t.ref === 'R001');
+assert.equal(r001.days_seen, 4, 'R001 présent 4 jours');
+assert.ok(h.totaux.clos >= 2, 'tickets clos comptés');
+ok('historique jour par jour + tickets qui traînent');
+
+console.log('\n── Cas limites ──');
+const dEmpty = await saveUpload('2026-07-24', []);
+assert.equal(dEmpty.tickets.length, 0, 'fichier vide accepté');
+assert.equal(dEmpty.closed, 2, 'les tickets de la veille sont clôturés');
+const reOpen = await saveUpload('2026-07-25', [T('R001', 'MNOC-TAOUZAR', 8.0)]);
+assert.equal(reOpen.tickets[0].status, 'ouvert', 'un ticket qui revient est rouvert');
+ok('fichier vide et réouverture d\'un ticket clos');
+
+await pg.close();
+console.log(`\n✅ ${pass} groupes de vérifications passés — la couche base est saine.\n`);

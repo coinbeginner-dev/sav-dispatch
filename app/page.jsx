@@ -5,22 +5,7 @@ import {
   parseTickets, suggestAssignments, buildJobs, retardClass,
   buildTechMessage, buildChefMessage, splitMessage, waLink,
 } from '../lib/dispatch';
-
-const LS = {
-  techs: 'savd_techs_v1',
-  zones: 'savd_zones_v1',
-  chef: 'savd_chef_v1',       // ancien format (un seul chef) — migration
-  chefs: 'savd_chefs_v1',     // nouveau format (liste)
-  history: 'savd_history_v1',
-};
-
-function load(key, fallback) {
-  try {
-    const v = JSON.parse(localStorage.getItem(key));
-    return v == null ? fallback : v;
-  } catch { return fallback; }
-}
-function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch {} }
+import { loadInitial, saveSettings, pushUpload, pushAssign, loadHistory } from '../lib/store';
 
 export default function Dashboard() {
   const [techs, setTechs] = useState(DEFAULT_TECHS);
@@ -31,34 +16,37 @@ export default function Dashboard() {
   const [errors, setErrors] = useState([]);
   const [fileName, setFileName] = useState('');
   const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [reports, setReports] = useState({});
-  const [ready, setReady] = useState(false);
+  const [db, setDb] = useState(false);
+  const [busy, setBusy] = useState(false);
   const fileRef = useRef(null);
 
   useEffect(() => {
-    // Migration ancien format chef unique → liste de chefs
-    let loadedChefs = load(LS.chefs, null);
-    if (!loadedChefs) {
-      const oldChef = load(LS.chef, null);
-      loadedChefs = oldChef ? [oldChef] : DEFAULT_CHEFS;
-    }
-    const loadedTechs = load(LS.techs, DEFAULT_TECHS).map((t) => ({
-      chef: loadedChefs[0]?.name || '', ...t,
-    }));
-    setChefs(loadedChefs);
-    setTechs(loadedTechs);
-    setZones(load(LS.zones, DEFAULT_ZONES));
-    setReady(true);
+    loadInitial().then((s) => {
+      setDb(s.db);
+      setTechs(s.techs);
+      setZones(s.zones);
+      setChefs(s.chefs);
+      if (s.tickets.length) {
+        setTickets(s.tickets);
+        setAssign(s.assign);
+        setReports(s.reports);
+        setFileName('dispatch du jour (base)');
+      }
+    });
   }, []);
 
-  function persistSettings(newTechs, newZones, newChefs) {
+  async function persistSettings(newTechs, newZones, newChefs) {
     setTechs(newTechs);
     setZones(newZones);
     setChefs(newChefs);
-    save(LS.techs, newTechs);
-    save(LS.zones, newZones);
-    save(LS.chefs, newChefs);
     if (tickets.length) setAssign(suggestAssignments(tickets, newZones, newTechs));
+    try {
+      await saveSettings(db, newTechs, newZones, newChefs);
+    } catch (e) {
+      alert(`Réglages non enregistrés : ${e.message}`);
+    }
   }
 
   const dateStr = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -74,26 +62,27 @@ export default function Dashboard() {
     const sheetName = wb.SheetNames.find((n) => n.toUpperCase().includes('SAV_MT')) || wb.SheetNames[0];
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: null });
     const { tickets: parsed, errors: errs } = parseTickets(rows);
-    setTickets(parsed);
-    setErrors(errs);
-    setAssign(suggestAssignments(parsed, zones, techs));
-
-    const hist = load(LS.history, {});
-    const today = new Date().toISOString().slice(0, 10);
-    const rep = {};
-    for (const t of parsed) {
-      let seen = 0;
-      for (const [day, refs] of Object.entries(hist)) {
-        if (day !== today && refs.includes(t.ref)) seen++;
-      }
-      if (seen > 0) rep[t.ref] = seen;
-    }
-    setReports(rep);
-    hist[today] = parsed.map((t) => t.ref);
-    const days = Object.keys(hist).sort();
-    while (days.length > 15) delete hist[days.shift()];
-    save(LS.history, hist);
     e.target.value = '';
+    setErrors(errs);
+    if (!parsed.length) { setTickets([]); return; }
+
+    setBusy(true);
+    try {
+      const res = await pushUpload(db, parsed, zones, techs);
+      setTickets(res.tickets);
+      setAssign(res.assign);
+      setReports(res.reports);
+      if (res.closed) {
+        setErrors([...errs, `${res.closed} ticket(s) absent(s) du fichier → marqué(s) traité(s)`]);
+      }
+    } catch (err) {
+      // La base a échoué : on affiche quand même la distribution du jour
+      setTickets(parsed);
+      setAssign(suggestAssignments(parsed, zones, techs));
+      setErrors([...errs, `Base indisponible (${err.message}) — dispatch affiché sans historique`]);
+    } finally {
+      setBusy(false);
+    }
   }
 
   // ── Distribution ──────────────────────────────────────────
@@ -124,8 +113,10 @@ export default function Dashboard() {
 
   function reassignJob(job, newTech) {
     const next = { ...assign };
-    for (const t of job.tickets) next[t.ref] = newTech || null;
+    const refs = job.tickets.map((t) => t.ref);
+    for (const r of refs) next[r] = newTech || null;
     setAssign(next);
+    pushAssign(db, refs, newTech).catch(() => {});
   }
 
   // ── WhatsApp ──────────────────────────────────────────────
@@ -159,8 +150,14 @@ export default function Dashboard() {
           <span style={S.brand}>3G<span style={{ color: '#E8841A' }}>COM</span></span>
           <span style={S.title}> SAV Dispatch — Haddaouia</span>
         </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={S.date}>{dateStr}</span>
+          <span style={db ? S.dbOn : S.dbOff} title={db
+            ? 'Réglages et historique partagés entre tous les appareils'
+            : 'Données stockées dans ce navigateur uniquement'}>
+            {db ? '🟢 base connectée' : '🟡 mode local'}
+          </span>
+          {db && <button style={S.btnGhost} onClick={() => setShowHistory(true)}>📊 Historique</button>}
           <button style={S.btnGhost} onClick={() => setShowSettings(true)}>⚙ Réglages</button>
           <a href="/api/logout" style={{ ...S.btnGhost, textDecoration: 'none' }}>Déconnexion</a>
         </div>
@@ -169,8 +166,8 @@ export default function Dashboard() {
       {/* Upload */}
       <section style={S.card}>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button style={S.btnPrimary} onClick={() => fileRef.current?.click()}>
-            📂 Charger le fichier du jour (.ods / .xlsx)
+          <button style={S.btnPrimary} onClick={() => fileRef.current?.click()} disabled={busy}>
+            {busy ? '⏳ Enregistrement…' : '📂 Charger le fichier du jour (.ods / .xlsx)'}
           </button>
           <input ref={fileRef} type="file" accept=".ods,.xlsx,.xls" style={{ display: 'none' }} onChange={onFile} />
           {fileName && <span style={{ fontSize: 13, color: '#556' }}>{fileName} — {tickets.length} tickets</span>}
@@ -265,6 +262,8 @@ export default function Dashboard() {
           onClose={() => setShowSettings(false)}
         />
       )}
+
+      {showHistory && <History onClose={() => setShowHistory(false)} />}
     </div>
   );
 }
@@ -434,6 +433,90 @@ function Settings({ techs, zones, chefs, onSave, onClose }) {
   );
 }
 
+// Historique centralisé : volumétrie jour par jour + tickets qui traînent
+function History({ onClose }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    loadHistory()
+      .then((d) => (d.db ? setData(d) : setErr(d.error || 'Base indisponible')))
+      .catch((e) => setErr(e.message));
+  }, []);
+
+  return (
+    <div style={S.modalBg} onClick={onClose}>
+      <div style={{ ...S.modal, maxWidth: 900 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <h2 style={{ margin: 0, fontSize: 18, color: '#0F1B3D' }}>📊 Historique</h2>
+          <button style={{ ...S.btnGhost, color: '#556', background: '#EEF1F6', border: 'none' }} onClick={onClose}>✕ Fermer</button>
+        </div>
+
+        {err && <p style={S.warn}>⚠ {err}</p>}
+        {!data && !err && <p style={S.hint}>Chargement…</p>}
+
+        {data && (
+          <>
+            <div style={S.statRow}>
+              <Stat n={data.totaux.total} l="Tickets suivis (total)" c="#0F1B3D" />
+              <Stat n={data.totaux.ouverts} l="Encore ouverts" c="#C0392B" />
+              <Stat n={data.totaux.clos} l="Traités (sortis du fichier)" c="#00753A" />
+            </div>
+
+            <h3 style={{ ...S.h3, marginTop: 20 }}>Jour par jour</h3>
+            <table style={S.table}>
+              <thead>
+                <tr>
+                  <th style={S.th}>Date</th><th style={S.th}>Tickets</th>
+                  <th style={S.th}>🔴 ≥48h</th><th style={S.th}>⚠ HD</th><th style={S.th}>✅ Traités</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.days.map((d) => (
+                  <tr key={d.day}>
+                    <td style={S.td}>{d.day.split('-').reverse().join('/')}</td>
+                    <td style={S.td}>{d.total}</td>
+                    <td style={{ ...S.td, color: '#C0392B', fontWeight: 700 }}>{d.rouge}</td>
+                    <td style={S.td}>{d.hd}</td>
+                    <td style={{ ...S.td, color: '#00753A' }}>{d.clos}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <h3 style={{ ...S.h3, marginTop: 24 }}>
+              Tickets reportés — présents sur plusieurs jours ({data.vieux.length})
+            </h3>
+            {data.vieux.length === 0 && <p style={S.hint}>Aucun ticket ne traîne d'un jour sur l'autre.</p>}
+            {data.vieux.length > 0 && (
+              <table style={S.table}>
+                <thead>
+                  <tr>
+                    <th style={S.th}>Ticket</th><th style={S.th}>Client</th><th style={S.th}>MSAN</th>
+                    <th style={S.th}>Jours</th><th style={S.th}>Délai</th><th style={S.th}>Technicien</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.vieux.map((t) => (
+                    <tr key={t.ref}>
+                      <td style={{ ...S.td, fontWeight: 700 }}>{t.ref}</td>
+                      <td style={S.td}>{t.client}</td>
+                      <td style={{ ...S.td, fontSize: 11 }}>{t.msan}</td>
+                      <td style={{ ...S.td, color: '#7A1515', fontWeight: 700 }}>↻ {t.days_seen}</td>
+                      <td style={S.td}>J+{Number(t.delai).toFixed(1)}</td>
+                      <td style={S.td}>{t.assigned_tech || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Styles ──────────────────────────────────────────────────
 const S = {
   page: { maxWidth: 1500, margin: '0 auto', padding: '16px 20px 60px' },
@@ -508,6 +591,20 @@ const S = {
     padding: '8px 16px', fontSize: 13, color: '#556', background: '#EEF1F6',
     border: 'none', borderRadius: 8, cursor: 'pointer',
   },
+  dbOn: {
+    fontSize: 11, fontWeight: 700, color: '#7CE0A8', background: 'rgba(0,150,63,.22)',
+    padding: '4px 10px', borderRadius: 20,
+  },
+  dbOff: {
+    fontSize: 11, fontWeight: 700, color: '#FFD79A', background: 'rgba(232,132,26,.22)',
+    padding: '4px 10px', borderRadius: 20,
+  },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
+  th: {
+    textAlign: 'left', padding: '8px 10px', fontSize: 11, textTransform: 'uppercase',
+    color: '#8892A4', borderBottom: '1px solid #EEF1F6', whiteSpace: 'nowrap',
+  },
+  td: { padding: '7px 10px', borderBottom: '1px solid #F5F7FA', color: '#33415C' },
   settingRow: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' },
   inputSm: { padding: '8px 10px', fontSize: 13, border: '1px solid #D7DCE5', borderRadius: 8 },
   hint: { fontSize: 12, color: '#8892A4', margin: '0 0 12px' },
