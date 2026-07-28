@@ -5,7 +5,17 @@ import {
   parseTickets, suggestAssignments, buildJobs, retardClass,
   buildTechMessage, buildChefMessage, splitMessage, waLink,
 } from '../lib/dispatch';
-import { loadInitial, saveSettings, pushUpload, pushAssign, loadHistory } from '../lib/store';
+import {
+  loadInitial, saveSettings, pushUpload, pushAssign, loadHistory,
+  pushStatut, flushStatuts, statutsEnAttente,
+} from '../lib/store';
+
+// Statuts terrain. Aujourd'hui posés par le chef ; demain par la remontée WhatsApp.
+const STATUT_LABEL = { fait: '✅ Fait', pas_acces: '🚪 Pas d\'accès', reporte: '⏭ Reporté' };
+const MOTIFS = {
+  pas_acces: ['Client absent', 'Pas de réponse', 'Refus', 'Adresse introuvable'],
+  reporte: ['RDV pris', 'Câble à remplacer', 'Matériel manquant', 'Nacelle / GC requis', 'Autre'],
+};
 
 export default function Dashboard() {
   const [techs, setTechs] = useState(DEFAULT_TECHS);
@@ -18,6 +28,8 @@ export default function Dashboard() {
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [reports, setReports] = useState({});
+  const [statuts, setStatuts] = useState({});
+  const [enAttente, setEnAttente] = useState(0);
   const [db, setDb] = useState(false);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef(null);
@@ -32,10 +44,29 @@ export default function Dashboard() {
         setTickets(s.tickets);
         setAssign(s.assign);
         setReports(s.reports);
+        setStatuts(s.statuts || {});
         setFileName('dispatch du jour (base)');
       }
     });
   }, []);
+
+  // Statuts posés hors ligne : on repart à la reconnexion
+  useEffect(() => {
+    const sync = () => flushStatuts().then(() => setEnAttente(statutsEnAttente()));
+    window.addEventListener('online', sync);
+    return () => window.removeEventListener('online', sync);
+  }, []);
+
+  function marquerStatut(job, statut, motif) {
+    const refs = job.tickets.map((t) => t.ref);
+    const next = { ...statuts };
+    for (const r of refs) {
+      if (statut) next[r] = { statut, motif: motif || null, source: 'chef', at: new Date().toISOString() };
+      else delete next[r];
+    }
+    setStatuts(next);
+    pushStatut(db, refs, statut, motif).finally(() => setEnAttente(statutsEnAttente()));
+  }
 
   async function persistSettings(newTechs, newZones, newChefs) {
     setTechs(newTechs);
@@ -108,8 +139,10 @@ export default function Dashboard() {
     const orange = tickets.filter((t) => t.delai >= 1 && t.delai < 2).length;
     const hd = tickets.filter((t) => t.tranche === 'HD').length;
     const splitters = new Set(tickets.filter((t) => t.splitter).map((t) => t.splitter)).size;
-    return { total, rouge, orange, hd, splitters, reportes: Object.keys(reports).length };
-  }, [tickets, reports]);
+    const faits = tickets.filter((t) => statuts[t.ref]?.statut === 'fait').length;
+    const rougesEnAttente = tickets.filter((t) => t.delai >= 2 && !statuts[t.ref]).length;
+    return { total, rouge, orange, hd, splitters, faits, rougesEnAttente, reportes: Object.keys(reports).length };
+  }, [tickets, reports, statuts]);
 
   function reassignJob(job, newTech) {
     const next = { ...assign };
@@ -157,6 +190,11 @@ export default function Dashboard() {
             : 'Données stockées dans ce navigateur uniquement'}>
             {db ? '🟢 base connectée' : '🟡 mode local'}
           </span>
+          {enAttente > 0 && (
+            <span style={S.dbOff} title="Statuts enregistrés hors ligne, envoyés au retour du réseau">
+              ⏳ {enAttente} statut(s) en attente
+            </span>
+          )}
           {db && <button style={S.btnGhost} onClick={() => setShowHistory(true)}>📊 Historique</button>}
           <button style={S.btnGhost} onClick={() => setShowSettings(true)}>⚙ Réglages</button>
           <a href="/api/logout" style={{ ...S.btnGhost, textDecoration: 'none' }}>Déconnexion</a>
@@ -182,6 +220,8 @@ export default function Dashboard() {
             <Stat n={stats.hd} l="⚠ HD (hors délai IAM)" c="#C0392B" />
             <Stat n={stats.splitters} l="⚡ Splitters isolés" c="#0070C0" />
             <Stat n={stats.reportes} l="↻ Reportés (déjà vus)" c="#7A1515" />
+            {db && <Stat n={stats.faits} l="✅ Traités aujourd'hui" c="#00753A" />}
+            {db && <Stat n={stats.rougesEnAttente} l="⏳ Rouges sans nouvelle" c="#C0392B" />}
           </div>
         )}
       </section>
@@ -191,7 +231,9 @@ export default function Dashboard() {
         <section style={{ ...S.card, borderLeft: '4px solid #C0392B' }}>
           <h3 style={{ ...S.h3, color: '#C0392B' }}>⚠ Non affectés ({perTech.unassignedTickets.length}) — MSAN inconnu ou technicien inactif</h3>
           {perTech.unassigned.map((job) => (
-            <JobRow key={job.key} job={job} techs={activeTechs} current="" onChange={(v) => reassignJob(job, v)} reports={reports} />
+            <JobRow key={job.key} job={job} techs={activeTechs} current="" onChange={(v) => reassignJob(job, v)}
+              reports={reports} db={db} statut={statuts[job.tickets[0].ref]}
+              onStatut={(s, m) => marquerStatut(job, s, m)} />
           ))}
         </section>
       )}
@@ -205,6 +247,7 @@ export default function Dashboard() {
               const nt = jobs.reduce((s, j) => s + j.tickets.length, 0);
               const rouges = jobs.reduce((s, j) => s + j.tickets.filter((t) => t.delai >= 2).length, 0);
               const maxLoad = Math.max(1, ...activeTechs.map((x) => (perTech.map[x.name] || []).reduce((s, j) => s + j.tickets.length, 0)));
+              const traites = jobs.filter((j) => statuts[j.tickets[0].ref]).length;
               return (
                 <div key={tech.name} style={S.techCol}>
                   <div style={S.techHead}>
@@ -219,13 +262,27 @@ export default function Dashboard() {
                       📱 WhatsApp
                     </button>
                   </div>
-                  <div style={S.loadBarBg}>
-                    <div style={{ ...S.loadBar, width: `${(nt / maxLoad) * 100}%`, background: nt > 15 ? '#C0392B' : '#E8841A' }} />
-                  </div>
+                  {db && jobs.length > 0 ? (
+                    <>
+                      <div style={S.loadBarBg}>
+                        <div style={{ ...S.loadBar, width: `${(traites / jobs.length) * 100}%`, background: '#00963F' }} />
+                      </div>
+                      <div style={{ fontSize: 11, color: '#8892A4', marginBottom: 8 }}>
+                        {traites}/{jobs.length} interventions renseignées
+                      </div>
+                    </>
+                  ) : (
+                    <div style={S.loadBarBg}>
+                      <div style={{ ...S.loadBar, width: `${(nt / maxLoad) * 100}%`, background: nt > 15 ? '#C0392B' : '#E8841A' }} />
+                    </div>
+                  )}
                   {!tech.phone && nt > 0 && <div style={S.warnSmall}>⚠ numéro WhatsApp manquant</div>}
                   <div style={{ maxHeight: 420, overflowY: 'auto' }}>
                     {jobs.map((job) => (
-                      <JobRow key={job.key} job={job} techs={activeTechs} current={tech.name} onChange={(v) => reassignJob(job, v)} reports={reports} />
+                      <JobRow key={job.key} job={job} techs={activeTechs} current={tech.name}
+                        onChange={(v) => reassignJob(job, v)} reports={reports}
+                        db={db} statut={statuts[job.tickets[0].ref]}
+                        onStatut={(s, m) => marquerStatut(job, s, m)} />
                     ))}
                   </div>
                 </div>
@@ -278,13 +335,20 @@ function Stat({ n, l, c }) {
   );
 }
 
-function JobRow({ job, techs, current, onChange, reports }) {
+function JobRow({ job, techs, current, onChange, reports, db, statut, onStatut }) {
   const worst = Math.max(...job.tickets.map((t) => t.delai));
   const rc = retardClass(worst);
   const isSpl = job.type === 'splitter';
   const rep = Math.max(0, ...job.tickets.map((t) => reports[t.ref] || 0));
+  const [motifPour, setMotifPour] = useState(null);
+  const fait = statut?.statut === 'fait';
   return (
-    <div style={{ ...S.job, background: rc.bg, borderLeft: `4px solid ${rc.color}` }}>
+    <div style={{
+      ...S.job,
+      background: statut ? (fait ? '#EAFAF1' : '#F5F7FA') : rc.bg,
+      borderLeft: `4px solid ${statut ? (fait ? '#00963F' : '#8892A4') : rc.color}`,
+      opacity: statut ? 0.85 : 1,
+    }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 13, color: '#0F1B3D' }}>
@@ -309,6 +373,36 @@ function JobRow({ job, techs, current, onChange, reports }) {
           {techs.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
         </select>
       </div>
+
+      {db && statut && (
+        <div style={S.statutBar}>
+          <span style={{ fontWeight: 700, color: fait ? '#00753A' : '#556' }}>
+            {STATUT_LABEL[statut.statut]}
+          </span>
+          {statut.motif && <span style={{ color: '#8892A4' }}>· {statut.motif}</span>}
+          {statut.source === 'whatsapp' && <span style={S.waBadge}>via WhatsApp</span>}
+          <button style={S.btnLink} onClick={() => { setMotifPour(null); onStatut(null); }}>annuler</button>
+        </div>
+      )}
+
+      {db && !statut && !motifPour && (
+        <div style={S.statutBar}>
+          <button style={S.btnStatut} onClick={() => onStatut('fait')}>✅ Fait</button>
+          <button style={S.btnStatut} onClick={() => setMotifPour('pas_acces')}>🚪 Pas d'accès</button>
+          <button style={S.btnStatut} onClick={() => setMotifPour('reporte')}>⏭ Reporté</button>
+        </div>
+      )}
+
+      {db && !statut && motifPour && (
+        <div style={S.statutBar}>
+          {MOTIFS[motifPour].map((m) => (
+            <button key={m} style={S.btnMotif} onClick={() => { onStatut(motifPour, m); setMotifPour(null); }}>
+              {m}
+            </button>
+          ))}
+          <button style={S.btnLink} onClick={() => setMotifPour(null)}>retour</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -598,6 +692,26 @@ const S = {
   dbOff: {
     fontSize: 11, fontWeight: 700, color: '#FFD79A', background: 'rgba(232,132,26,.22)',
     padding: '4px 10px', borderRadius: 20,
+  },
+  statutBar: {
+    display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
+    marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(15,27,61,.08)', fontSize: 11,
+  },
+  btnStatut: {
+    padding: '6px 10px', fontSize: 11, fontWeight: 600, color: '#0F1B3D', background: '#fff',
+    border: '1px solid #D7DCE5', borderRadius: 6, cursor: 'pointer',
+  },
+  btnMotif: {
+    padding: '5px 9px', fontSize: 11, color: '#0F1B3D', background: '#EEF1F6',
+    border: 'none', borderRadius: 6, cursor: 'pointer',
+  },
+  btnLink: {
+    padding: 0, fontSize: 11, color: '#8892A4', background: 'none',
+    border: 'none', cursor: 'pointer', textDecoration: 'underline', marginLeft: 'auto',
+  },
+  waBadge: {
+    fontSize: 10, fontWeight: 700, color: '#0B6B33', background: '#D7F5E3',
+    padding: '2px 6px', borderRadius: 4,
   },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
   th: {

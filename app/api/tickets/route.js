@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { hasDb, getDay, saveUpload, assignTickets } from '../../../lib/db';
+import { hasDb, getDay, saveUpload, assignTickets, setStatut, getAvancement } from '../../../lib/db';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,12 +32,19 @@ export async function POST(req) {
   }
 }
 
-// Réaffectation manuelle
+// Réaffectation manuelle (tech) ou statut terrain (statut)
 export async function PATCH(req) {
   if (!hasDb()) return NextResponse.json({ db: false }, { status: 503 });
   try {
-    const { refs, tech, day } = await req.json();
-    return NextResponse.json(await assignTickets(refs, tech, day || today()));
+    const body = await req.json();
+    const day = body.day || today();
+    if ('statut' in body) {
+      const r = await setStatut(body.refs, body.statut, {
+        day, motif: body.motif || null, source: body.source || 'chef',
+      });
+      return NextResponse.json({ ...r, avancement: await getAvancement(day) });
+    }
+    return NextResponse.json(await assignTickets(body.refs, body.tech, day));
   } catch (e) {
     return NextResponse.json({ error: String(e.message || e) }, { status: 500 });
   }

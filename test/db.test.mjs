@@ -4,6 +4,7 @@ import { PGlite } from '@electric-sql/pglite';
 import assert from 'node:assert/strict';
 import {
   useSqlClient, getSettings, saveSettings, saveUpload, getDay, assignTickets, getHistory,
+  setStatut, getAvancement, getEcarts,
 } from '../lib/db.js';
 
 // ── Shim : reproduit l'API tagged-template du driver Neon sur PGlite ──
@@ -157,6 +158,56 @@ assert.equal(dEmpty.closed, 2, 'les tickets de la veille sont clôturés');
 const reOpen = await saveUpload('2026-07-25', [T('R001', 'MNOC-TAOUZAR', 8.0)]);
 assert.equal(reOpen.tickets[0].status, 'ouvert', 'un ticket qui revient est rouvert');
 ok('fichier vide et réouverture d\'un ticket clos');
+
+console.log('\n── Statuts terrain ──');
+await saveSettings({
+  chefs: [{ name: 'Soufiane', phone: '212600000001' }],
+  techs: [
+    { name: 'RACHID', phone: '212611111111', active: true, chef: 'Soufiane' },
+    { name: 'RAFIK', phone: '212622222222', active: true, chef: 'Soufiane' },
+  ],
+  zones: [{ msan: 'MNOC-TAOUZAR', tech: 'RACHID' }, { msan: 'GA-C-COLLINE-1', tech: 'RAFIK' }],
+});
+await saveUpload('2026-08-01', [
+  T('R100', 'MNOC-TAOUZAR', 3.0), T('R200', 'MNOC-TAOUZAR', 2.5),
+  T('R300', 'GA-C-COLLINE-1', 0.5),
+]);
+await setStatut(['R100'], 'fait', { day: '2026-08-01' });
+await setStatut(['R200'], 'pas_acces', { day: '2026-08-01', motif: 'Client absent' });
+const j = await getDay('2026-08-01');
+assert.equal(j.statuts.R100.statut, 'fait');
+assert.equal(j.statuts.R200.motif, 'Client absent');
+assert.equal(j.statuts.R200.source, 'chef', 'source par défaut = saisie chef');
+assert.ok(j.statuts.R100.at, 'horodatage renseigné');
+assert.equal(j.statuts.R300, undefined, 'ticket sans statut = en attente');
+ok('pose de statut avec motif, horodatage et source');
+
+await setStatut(['R100'], null, { day: '2026-08-01' });
+const j2 = await getDay('2026-08-01');
+assert.equal(j2.statuts.R100, undefined, 'annulation remet en attente');
+await setStatut(['R100'], 'fait', { day: '2026-08-01', source: 'whatsapp' });
+const j3 = await getDay('2026-08-01');
+assert.equal(j3.statuts.R100.source, 'whatsapp', 'remontée WhatsApp tracée distinctement');
+await assert.rejects(() => setStatut(['R100'], 'nimporte_quoi', { day: '2026-08-01' }), /statut inconnu/);
+ok('annulation, source whatsapp et rejet d\'un statut invalide');
+
+const av = await getAvancement('2026-08-01');
+const avRachid = av.find((a) => a.tech === 'RACHID');
+assert.equal(avRachid.total, 2);
+assert.equal(avRachid.fait, 1);
+assert.equal(avRachid.pas_acces, 1);
+assert.equal(avRachid.rouges_en_attente, 0, 'les 2 rouges de RACHID sont renseignés');
+const avRafik = av.find((a) => a.tech === 'RAFIK');
+assert.equal(avRafik.total, 1);
+assert.equal(avRafik.fait, 0);
+ok('avancement du jour par technicien');
+
+// Le lendemain R100 est toujours dans le fichier alors qu'il a été déclaré fait
+await saveUpload('2026-08-02', [T('R100', 'MNOC-TAOUZAR', 4.0), T('R300', 'GA-C-COLLINE-1', 1.5)]);
+const ecarts = await getEcarts('2026-08-02');
+assert.equal(ecarts.length, 1, 'un seul écart détecté');
+assert.equal(ecarts[0].ref, 'R100', 'déclaré fait la veille mais toujours présent');
+ok('écart déclaratif / fichier : intervention faite mais non clôturée côté IAM');
 
 await pg.close();
 console.log(`\n✅ ${pass} groupes de vérifications passés — la couche base est saine.\n`);
