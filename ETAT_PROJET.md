@@ -81,10 +81,39 @@ ils utilisent déjà l'app IAM et ne veulent pas d'une couche de plus.
 - Risque principal, non technique : les messages partiront d'un numéro professionnel inconnu et non
   plus du WhatsApp d'Issam. Démarrer avec 1-2 techniciens volontaires, pas les 7 d'un coup.
 
+## WhatsApp : canal opérationnel (28/07/2026)
+App Meta **SAV_dispatch**, portefeuille **Neoclos Maroc**, en mode développement.
+
+| Élément | Valeur |
+|---|---|
+| App ID | `1610615407121373` |
+| WABA ID (compte de test) | `1525088552967801` |
+| Phone Number ID (numéro de test) | `1198316196705989` |
+| Numéro de test | +1 555-203-9233 (US — prévenir les chefs, sinon lu comme un spam) |
+| URL de rappel | `https://sav-dispatch.vercel.app/api/whatsapp` |
+
+Secrets dans les variables d'env Vercel (jamais dans Git) : `WHATSAPP_TOKEN`,
+`WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN`, plus les identifiants ci-dessus.
+
+**État : réception opérationnelle et vérifiée de bout en bout en production.** App abonnée au WABA,
+URL de rappel enregistrée et active sur le champ `messages`, signature HMAC vérifiée (message
+correctement signé accepté et stocké, signature falsifiée rejetée en 401).
+
+⚠️ Le `WHATSAPP_TOKEN` est **temporaire (24 h)**. Avant tout usage réel : créer un jeton permanent
+via un utilisateur système, et **réinitialiser la clé secrète de l'app** (elle a circulé pendant la
+configuration). Bouton « Réinitialiser » dans Paramètres de l'app → Général.
+
+Reste à faire côté Meta, par Soufiane : enregistrer les **numéros destinataires** (5 max en phase de
+test ; Meta envoie un code sur chaque téléphone, non automatisable).
+
 ## Prochaines étapes (ordre recommandé)
-1. **Bot WhatsApp** — dès que l'app de test Meta existe : webhook `/api/whatsapp`, extraction des
-   statuts depuis texte/vocal/photo, boucle de confirmation, écriture avec `source = 'whatsapp'`.
-   Le socle de statuts est déjà en place, il n'y a que le canal à brancher.
+1. **Extraction des statuts** depuis les messages reçus : texte, vocal darija (extraction et non
+   transcription, contre la liste des tickets du chef), photo. Boucle de confirmation avant
+   écriture, puis `setStatut(..., source: 'whatsapp')`. La table `wa_messages` sert de banc d'essai :
+   collecter de vrais messages avant d'écrire la logique.
+2. **Envoi du récap matinal** : modèle pré-approuvé court, puis liste détaillée en format libre.
+   Grouper par équipe avec les rouges en tête — un chef couvre plusieurs équipes, donc 60 à 90
+   tickets : la liste brute serait illisible sur téléphone.
 2. **Afficher les écarts** `getEcarts` dans l'UI (tickets faits mais non clôturés côté IAM).
 3. **Feuille SAV_DFO** (dégroupage) : parser et UI déjà en place, seul le mapping de colonnes change.
 4. **Multi-secteur (Anfa)** : colonne `secteur` sur `zones` et `techs` + filtre en tête d'écran.
