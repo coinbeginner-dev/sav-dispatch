@@ -7,7 +7,12 @@
 // HMAC-SHA256 de Meta sur chaque message entrant.
 import { NextResponse } from 'next/server';
 import crypto from 'node:crypto';
-import { hasDb, saveInbound, saveStatus, saveHit } from '../../../lib/db';
+import {
+  hasDb, saveInbound, saveStatus, saveHit,
+  chefParTelephone, ticketsDuJourPourChef, setStatut,
+} from '../../../lib/db';
+import { analyser, messageConfirmation } from '../../../lib/extraction';
+import { envoyerTexte } from '../../../lib/whatsapp';
 
 export const dynamic = 'force-dynamic';
 
@@ -84,6 +89,41 @@ function extraire(payload) {
   return { messages: out, statuts };
 }
 
+function aujourdhui() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Traite un message d'un chef d'équipe : identification, lecture, écriture,
+// puis accusé de réception. L'accusé rappelle le nom du client, ce qui permet
+// au chef de repérer immédiatement une erreur de numéro et de la corriger.
+async function traiterMessage(m) {
+  const chef = await chefParTelephone(m.from);
+  if (!chef) {
+    return envoyerTexte(m.from,
+      "Ce numéro n'est pas reconnu comme chef d'équipe. "
+      + "Demande à l'orienteur de l'ajouter dans les réglages de SAV Dispatch.");
+  }
+
+  if (m.type !== 'text' || !m.text) {
+    return envoyerTexte(m.from, messageConfirmation({ instructions: [], ignorees: [] }, m.type));
+  }
+
+  const jour = aujourdhui();
+  const tickets = await ticketsDuJourPourChef(jour, chef.name);
+  if (!tickets.length) {
+    return envoyerTexte(m.from, `Aucune intervention enregistrée aujourd'hui pour tes équipes.`);
+  }
+
+  const res = analyser(m.text, tickets);
+  for (const i of res.instructions) {
+    if (i.statut) {
+      await setStatut([i.ref], i.statut, { day: jour, motif: i.note, source: 'whatsapp' });
+    }
+  }
+  return envoyerTexte(m.from, messageConfirmation(res, 'text'));
+}
+
 export async function POST(req) {
   const brut = await req.text();
   const entete = req.headers.get('x-hub-signature-256');
@@ -101,8 +141,12 @@ export async function POST(req) {
   try {
     const { messages, statuts } = extraire(JSON.parse(brut));
     if (hasDb()) {
-      for (const m of messages) await saveInbound(m);
       for (const s of statuts) await saveStatus(s);
+      for (const m of messages) {
+        // Meta rejoue les webhooks non acquittés : on ne traite qu'une fois.
+        const { nouveau } = await saveInbound(m);
+        if (nouveau) await traiterMessage(m);
+      }
     }
   } catch (e) {
     console.error('webhook whatsapp :', e.message);
