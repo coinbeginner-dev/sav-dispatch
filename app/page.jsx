@@ -170,7 +170,7 @@ export default function Dashboard() {
       const jobs = perTech.map[t.name] || [];
       if (jobs.length) filled[t.name] = jobs;
     }
-    if (!Object.keys(filled).length) { alert(`Aucun ticket pour les techniciens de ${chef.name}.`); return; }
+    if (!Object.keys(filled).length) { alert(`Aucune intervention pour les équipes de ${chef.name}.`); return; }
     const msg = buildChefMessage(filled, dateStr, perTech.unassignedTickets.length, chef.name);
     for (const part of splitMessage(msg)) window.open(waLink(chef.phone, part), '_blank');
   }
@@ -229,7 +229,7 @@ export default function Dashboard() {
       {/* Non affectés */}
       {perTech.unassignedTickets.length > 0 && (
         <section style={{ ...S.card, borderLeft: '4px solid #C0392B' }}>
-          <h3 style={{ ...S.h3, color: '#C0392B' }}>⚠ Non affectés ({perTech.unassignedTickets.length}) — MSAN inconnu ou technicien inactif</h3>
+          <h3 style={{ ...S.h3, color: '#C0392B' }}>⚠ Non affectés ({perTech.unassignedTickets.length}) — MSAN inconnu ou équipe inactive</h3>
           {perTech.unassigned.map((job) => (
             <JobRow key={job.key} job={job} techs={activeTechs} current="" onChange={(v) => reassignJob(job, v)}
               reports={reports} db={db} statut={statuts[job.tickets[0].ref]}
@@ -238,7 +238,7 @@ export default function Dashboard() {
         </section>
       )}
 
-      {/* Colonnes techniciens */}
+      {/* Colonnes équipes */}
       {tickets.length > 0 && (
         <>
           <section style={S.techGrid}>
@@ -298,7 +298,7 @@ export default function Dashboard() {
               </button>
             ))}
             <span style={{ fontSize: 12, color: '#8892A4' }}>
-              Chaque chef reçoit le récap de ses techniciens. Les boutons ouvrent WhatsApp pré-rempli.
+              Chaque chef reçoit le récap de ses équipes. Les boutons ouvrent WhatsApp pré-rempli.
             </span>
           </section>
         </>
@@ -427,7 +427,7 @@ function Settings({ techs, zones, chefs, onSave, onClose }) {
     const cleanTechs = dTechs.filter((t) => t.name.trim());
     const cleanZones = dZones.filter((z) => z.msan.trim());
     const cleanChefs = dChefs.filter((c) => c.name.trim());
-    // Techniciens dont le chef a été supprimé → premier chef restant
+    // Equipes dont le chef a été supprimé → premier chef restant
     const chefNames = new Set(cleanChefs.map((c) => c.name));
     const fixedTechs = cleanTechs.map((t) => chefNames.has(t.chef) ? t : { ...t, chef: cleanChefs[0]?.name || '' });
     onSave(fixedTechs, cleanZones, cleanChefs);
@@ -444,17 +444,17 @@ function Settings({ techs, zones, chefs, onSave, onClose }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          <button style={tab === 'techs' ? S.tabOn : S.tabOff} onClick={() => setTab('techs')}>Techniciens</button>
+          <button style={tab === 'techs' ? S.tabOn : S.tabOff} onClick={() => setTab('techs')}>Équipes</button>
           <button style={tab === 'zones' ? S.tabOn : S.tabOff} onClick={() => setTab('zones')}>Zones (MSAN)</button>
           <button style={tab === 'chefs' ? S.tabOn : S.tabOff} onClick={() => setTab('chefs')}>Chefs d'équipe</button>
         </div>
 
         {tab === 'techs' && (
           <div>
-            <p style={S.hint}>Numéro au format international sans + ni espaces (ex. 212661234567). Chaque technicien est rattaché à un chef d'équipe.</p>
+            <p style={S.hint}>Numéro au format international sans + ni espaces (ex. 212661234567). Chaque équipe est identifiée par le nom de son TL et rattachée à un chef d'équipe.</p>
             {dTechs.map((t, i) => (
               <div key={i} style={S.settingRow}>
-                <input style={{ ...S.inputSm, width: 110 }} placeholder="Nom" value={t.name}
+                <input style={{ ...S.inputSm, width: 110 }} placeholder="Nom (TL)" value={t.name}
                   onChange={(e) => setT(dTechs.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
                 <input style={{ ...S.inputSm, flex: 1, minWidth: 120 }} placeholder="N° WhatsApp" value={t.phone}
                   onChange={(e) => setT(dTechs.map((x, j) => j === i ? { ...x, phone: e.target.value } : x))} />
@@ -472,21 +472,21 @@ function Settings({ techs, zones, chefs, onSave, onClose }) {
               </div>
             ))}
             <button style={S.btnAdd} onClick={() => setT([...dTechs, { name: '', phone: '', active: true, chef: dChefs[0]?.name || '' }])}>
-              + Ajouter un technicien
+              + Ajouter une équipe
             </button>
           </div>
         )}
 
         {tab === 'zones' && (
           <div>
-            <p style={S.hint}>Chaque MSAN est affecté à un technicien par défaut. Les tickets suivent cette règle, ajustables ensuite.</p>
+            <p style={S.hint}>Chaque MSAN est affecté à une équipe par défaut. Les tickets suivent cette règle, ajustables ensuite.</p>
             {dZones.map((z, i) => (
               <div key={i} style={S.settingRow}>
                 <input style={{ ...S.inputSm, flex: 1 }} placeholder="Nom du MSAN (ex. MNOC-TAOUZAR)" value={z.msan}
                   onChange={(e) => setZ(dZones.map((x, j) => j === i ? { ...x, msan: e.target.value } : x))} />
                 <select style={{ ...S.inputSm, width: 140 }} value={z.tech}
                   onChange={(e) => setZ(dZones.map((x, j) => j === i ? { ...x, tech: e.target.value } : x))}>
-                  <option value="">— technicien —</option>
+                  <option value="">— équipe —</option>
                   {dTechs.filter((t) => t.name.trim()).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
                 </select>
                 <button style={S.btnDel} title="Supprimer" onClick={() => setZ(dZones.filter((_, j) => j !== i))}>🗑</button>
@@ -500,7 +500,7 @@ function Settings({ techs, zones, chefs, onSave, onClose }) {
 
         {tab === 'chefs' && (
           <div>
-            <p style={S.hint}>Chaque chef d'équipe pilote un ensemble de techniciens (rattachement dans l'onglet Techniciens). Il reçoit le récap WhatsApp de ses techniciens uniquement.</p>
+            <p style={S.hint}>Chaque chef d'équipe pilote plusieurs équipes (rattachement dans l'onglet Équipes). Il reçoit le récap WhatsApp de ses équipes uniquement, et c'est lui qui remonte les statuts.</p>
             {dChefs.map((c, i) => (
               <div key={i} style={S.settingRow}>
                 <input style={{ ...S.inputSm, width: 160 }} placeholder="Nom" value={c.name}
@@ -508,7 +508,7 @@ function Settings({ techs, zones, chefs, onSave, onClose }) {
                 <input style={{ ...S.inputSm, flex: 1 }} placeholder="N° WhatsApp (212...)" value={c.phone}
                   onChange={(e) => setC(dChefs.map((x, j) => j === i ? { ...x, phone: e.target.value } : x))} />
                 <span style={{ fontSize: 11, color: '#8892A4', minWidth: 80 }}>
-                  {dTechs.filter((t) => t.chef === c.name && t.active).length} technicien(s)
+                  {dTechs.filter((t) => t.chef === c.name && t.active).length} équipe(s)
                 </span>
                 <button style={S.btnDel} title="Supprimer" onClick={() => setC(dChefs.filter((_, j) => j !== i))}>🗑</button>
               </div>
@@ -587,7 +587,7 @@ function History({ onClose }) {
                 <thead>
                   <tr>
                     <th style={S.th}>Ticket</th><th style={S.th}>Client</th><th style={S.th}>MSAN</th>
-                    <th style={S.th}>Jours</th><th style={S.th}>Délai</th><th style={S.th}>Technicien</th>
+                    <th style={S.th}>Jours</th><th style={S.th}>Délai</th><th style={S.th}>Équipe</th>
                   </tr>
                 </thead>
                 <tbody>
