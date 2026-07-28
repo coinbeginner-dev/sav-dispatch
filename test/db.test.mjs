@@ -244,11 +244,17 @@ assert.equal(arbB.tickets.find((t) => t.ref === 'R500').hors_dispatch, false, "l
 assert.equal(arbB.tickets.find((t) => t.ref === 'R501').hors_dispatch, true, 'les autres restent exclus');
 ok('replanification a la main par l orienteur');
 
-// Un ticket renseigne le jour meme ne doit pas etre exclu retroactivement
+// Rechargement du fichier le jour meme : l'arbitrage doit se rejouer a l'identique
 await setStatut(['R502'], 'fait', { day: '2026-09-02' });
-const arbC = await getDay('2026-09-02');
-assert.equal(arbC.tickets.find((t) => t.ref === 'R502').hors_dispatch, false);
-ok('un statut pose le jour meme ne sort pas le ticket du dispatch');
+const rechargement = await saveUpload('2026-09-02', [
+  T('R500', 'MNOC-TAOUZAR', 3.0), T('R501', 'MNOC-TAOUZAR', 2.0), T('R502', 'GA-C-COLLINE-1', 1.5),
+]);
+const apres = Object.fromEntries(rechargement.tickets.map((t) => [t.ref, t]));
+assert.equal(apres.R502.hors_dispatch, true, 'renseigne aujourd hui -> exclu des le rechargement');
+assert.equal(apres.R502.arbitrage, 'fait');
+assert.equal(apres.R500.hors_dispatch, false, "la decision de l'orienteur survit au rechargement");
+assert.equal(apres.R501.hors_dispatch, true, 'non arbitre -> toujours exclu');
+ok('un rechargement en cours de journee produit le meme arbitrage, sans effacer les decisions');
 
 // Le surlendemain : R501 revient avec le motif le plus recent
 await setStatut(['R501'], 'reporte', { day: '2026-09-02', motif: 'POC a changer' });
