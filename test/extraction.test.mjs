@@ -59,7 +59,7 @@ assert.equal(bon.instructions[0].ref, 'R341024219');
 assert.equal(bon.instructions[0].statut, 'fait');
 assert.equal(bon.instructions[0].ticket.client, 'FATIMA CHERATE');
 assert.match(messageConfirmation(bon), /FATIMA CHERATE : fait/);
-assert.match(messageConfirmation(bon), /C'est bon \?/);
+assert.match(messageConfirmation(bon), /Enregistr/);
 ok('numéro + statut : instruction prête, confirmation demandée');
 
 console.log('\n── Plusieurs tickets dans un seul message ──');
