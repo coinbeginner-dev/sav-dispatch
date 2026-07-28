@@ -91,4 +91,56 @@ assert.equal(estConfirmation('machi'), false);
 assert.equal(estConfirmation('R340875265 aussi'), null, 'ni oui ni non → nouveau message');
 ok('oui / non en français et darija, et cas indécidable');
 
+
+console.log('\n── Aléas de saisie des chefs d’équipe ──');
+
+// Erreur de numéro : le ticket visé par erreur doit pouvoir être remis en attente
+const dejaFait = TICKETS.map((t) => (t.ref === 'R340875265' ? { ...t, statut: 'fait' } : t));
+const annul = analyser('R340875265 annuler', dejaFait);
+assert.equal(annul.instructions.length, 1);
+assert.equal(annul.instructions[0].annulation, true);
+assert.equal(annul.instructions[0].statut, null);
+assert.match(messageConfirmation(annul), /remis en attente \(fait annulé\)/);
+ok('annulation d’une saisie erronée : le ticket repart en vigilance');
+
+// Darija et autres formulations d'annulation
+for (const mot of ['annuler', 'erreur', 'ghalat', 'supprimer', 'oublie']) {
+  assert.equal(analyser(`R340875265 ${mot}`, dejaFait).instructions[0].annulation, true, mot);
+}
+ok('« erreur », « ghalat », « supprimer », « oublie » annulent aussi');
+
+// L'annulation prime sur un statut présent dans la même ligne
+const contradictoire = analyser('R340875265 fait non erreur', dejaFait);
+assert.equal(contradictoire.instructions[0].annulation, true);
+assert.equal(contradictoire.instructions[0].statut, null);
+ok('« fait … erreur » dans une même ligne : on annule, on n’écrit pas');
+
+// Correction d'un statut : le reçu rappelle ce qui est remplacé
+const corrige = analyser('R340875265 reporté', dejaFait);
+assert.equal(corrige.instructions[0].statut, 'reporte');
+assert.match(messageConfirmation(corrige), /reporté \(remplace : fait\)/);
+ok('correction d’un statut : le reçu signale la valeur remplacée');
+
+// Ticket d'une autre équipe : message explicite, pas « numéro manquant »
+const hors = analyser('bonjour', TICKETS);
+hors.horsPerimetre = ['R340999999'];
+assert.match(messageConfirmation(hors), /n’est pas attribué à tes équipes/);
+ok('ticket hors périmètre : signalé comme tel, rien enregistré');
+
+// Deux tickets sur une même ligne : le statut s'applique aux deux
+const deux = analyser('R341024219 et R340875265 fait', TICKETS);
+assert.equal(deux.instructions.length, 2);
+assert.ok(deux.instructions.every((i) => i.statut === 'fait'));
+ok('deux numéros sur une ligne reçoivent le même statut');
+
+// Statuts contradictoires : le plus précis l'emporte
+assert.equal(detecterStatut('ok pas d’accès'), 'pas_acces', 'expression prioritaire sur mot isolé');
+ok('« ok pas d’accès » est lu comme pas d’accès, pas comme fait');
+
+// Annulation sans numéro : on n'annule rien au hasard
+const annulVague = analyser('annuler le dernier', TICKETS);
+assert.equal(annulVague.instructions.length, 0);
+assert.match(messageConfirmation(annulVague), /Sans numéro de ticket/);
+ok('« annuler le dernier » n’annule rien : le numéro reste obligatoire');
+
 console.log(`\n✅ ${pass} groupes de vérifications passés — lecture des retours prête.\n`);

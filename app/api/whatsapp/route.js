@@ -9,9 +9,9 @@ import { NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import {
   hasDb, saveInbound, saveStatus, saveHit,
-  chefParTelephone, ticketsDuJourPourChef, setStatut,
+  chefParTelephone, ticketsDuJourPourChef, setStatut, getDay,
 } from '../../../lib/db';
-import { analyser, messageConfirmation } from '../../../lib/extraction';
+import { analyser, messageConfirmation, refsCitees } from '../../../lib/extraction';
 import { envoyerTexte } from '../../../lib/whatsapp';
 
 export const dynamic = 'force-dynamic';
@@ -116,8 +116,17 @@ async function traiterMessage(m) {
   }
 
   const res = analyser(m.text, tickets);
+
+  // Un numéro valide mais confié à une autre équipe doit être signalé comme tel :
+  // dire « numéro manquant » enverrait le chef chercher une faute inexistante.
+  const tousDuJour = (await getDay(jour)).tickets;
+  res.horsPerimetre = refsCitees(m.text, tousDuJour)
+    .filter((ref) => !tickets.some((t) => t.ref === ref));
+
   for (const i of res.instructions) {
-    if (i.statut) {
+    if (i.annulation) {
+      await setStatut([i.ref], null, { day: jour });
+    } else if (i.statut) {
       await setStatut([i.ref], i.statut, { day: jour, motif: i.note, source: 'whatsapp' });
     }
   }
