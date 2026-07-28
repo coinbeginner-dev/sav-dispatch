@@ -7,7 +7,7 @@
 // HMAC-SHA256 de Meta sur chaque message entrant.
 import { NextResponse } from 'next/server';
 import crypto from 'node:crypto';
-import { hasDb, saveInbound } from '../../../lib/db';
+import { hasDb, saveInbound, saveStatus } from '../../../lib/db';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,14 +40,26 @@ function signatureValide(brut, entete) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-// Aplatit la charge utile Meta en messages exploitables
-function extraireMessages(payload) {
+// Aplatit la charge utile Meta : messages reçus d'un côté, accusés de statut de l'autre.
+// Meta envoie les deux sur le même champ `messages`.
+function extraire(payload) {
   const out = [];
+  const statuts = [];
   for (const entry of payload?.entry || []) {
     for (const ch of entry.changes || []) {
       const v = ch.value || {};
       const contacts = {};
       for (const c of v.contacts || []) contacts[c.wa_id] = c.profile?.name || '';
+      for (const s of v.statuses || []) {
+        const err = (s.errors || [])[0] || {};
+        statuts.push({
+          id: s.id,
+          recipient: s.recipient_id || '',
+          status: s.status || '',
+          errorCode: err.code != null ? String(err.code) : null,
+          errorTitle: err.title || err.message || null,
+        });
+      }
       for (const m of v.messages || []) {
         out.push({
           id: m.id,
@@ -61,7 +73,7 @@ function extraireMessages(payload) {
       }
     }
   }
-  return out;
+  return { messages: out, statuts };
 }
 
 export async function POST(req) {
@@ -73,9 +85,10 @@ export async function POST(req) {
 
   // On acquitte toujours en 200 : sinon Meta rejoue le message en boucle.
   try {
-    const messages = extraireMessages(JSON.parse(brut));
+    const { messages, statuts } = extraire(JSON.parse(brut));
     if (hasDb()) {
       for (const m of messages) await saveInbound(m);
+      for (const s of statuts) await saveStatus(s);
     }
   } catch (e) {
     console.error('webhook whatsapp :', e.message);
