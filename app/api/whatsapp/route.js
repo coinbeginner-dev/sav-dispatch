@@ -27,17 +27,25 @@ export async function GET(req) {
   return new NextResponse('verify_token invalide', { status: 403 });
 }
 
-// Meta signe chaque requête avec l'app secret : on rejette tout ce qui ne colle pas.
-// Sans secret configuré on refuse en bloc — cet endpoint est public et écrit en base,
-// il ne doit jamais s'ouvrir par défaut de configuration.
+// Meta signe chaque requête avec le secret de l'app qui reçoit. On accepte
+// plusieurs secrets (séparés par des virgules) afin de pouvoir changer de
+// numéro ou d'app sans coupure de réception.
+// Sans secret configuré on refuse en bloc — cet endpoint est public et écrit en
+// base, il ne doit jamais s'ouvrir par défaut de configuration.
 function signatureValide(brut, entete) {
-  const secret = process.env.WHATSAPP_APP_SECRET;
-  if (!secret) return null;
+  const secrets = (process.env.WHATSAPP_APP_SECRET || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  if (!secrets.length) return null;
   if (!entete?.startsWith('sha256=')) return false;
-  const attendu = 'sha256=' + crypto.createHmac('sha256', secret).update(brut, 'utf8').digest('hex');
-  const a = Buffer.from(attendu);
-  const b = Buffer.from(entete);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+
+  const recu = Buffer.from(entete);
+  for (const secret of secrets) {
+    const attendu = Buffer.from(
+      'sha256=' + crypto.createHmac('sha256', secret).update(brut, 'utf8').digest('hex')
+    );
+    if (attendu.length === recu.length && crypto.timingSafeEqual(attendu, recu)) return true;
+  }
+  return false;
 }
 
 // Aplatit la charge utile Meta : messages reçus d'un côté, accusés de statut de l'autre.
