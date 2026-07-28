@@ -7,7 +7,7 @@
 // HMAC-SHA256 de Meta sur chaque message entrant.
 import { NextResponse } from 'next/server';
 import crypto from 'node:crypto';
-import { hasDb, saveInbound, saveStatus } from '../../../lib/db';
+import { hasDb, saveInbound, saveStatus, saveHit } from '../../../lib/db';
 
 export const dynamic = 'force-dynamic';
 
@@ -78,8 +78,14 @@ function extraire(payload) {
 
 export async function POST(req) {
   const brut = await req.text();
+  const entete = req.headers.get('x-hub-signature-256');
+  const ok = signatureValide(brut, entete);
 
-  const ok = signatureValide(brut, req.headers.get('x-hub-signature-256'));
+  // Diagnostic : on trace l'appel avant tout rejet, sans stocker de contenu.
+  const resultat = ok === true ? 'accepte' : ok === false ? 'signature refusee' : 'secret absent';
+  console.log(`webhook whatsapp : ${resultat}, ${brut.length} octets, signature ${entete ? 'presente' : 'absente'}`);
+  if (hasDb()) await saveHit({ signature: entete ? 'presente' : 'absente', taille: brut.length, resultat });
+
   if (ok === null) return new NextResponse('WHATSAPP_APP_SECRET non configuré', { status: 503 });
   if (ok === false) return new NextResponse('signature invalide', { status: 401 });
 
