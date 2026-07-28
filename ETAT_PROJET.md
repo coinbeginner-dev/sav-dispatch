@@ -1,8 +1,8 @@
-# SAV Dispatch — État du projet (28/07/2026, v1.2)
+# SAV Dispatch — État du projet (28/07/2026, v1.3)
 
 ## Ce qui existe et fonctionne
 - **App déployée** : https://sav-dispatch.vercel.app (projet Vercel `sav-dispatch`, team `coinbeginners-projects`, projectId `prj_IHlX3RD6VUVcndK6SRcO7oitfPa3`)
-- **Version en ligne** : **v1.2** (v1.1 + couche base de données). Prod = `main` sur GitHub.
+- **Version en ligne** : **v1.3** (couche base + suivi intra-journée). Prod = `main` sur GitHub.
 - **GitHub** : https://github.com/coinbeginner-dev/sav-dispatch (branche `main`, à jour).
 - **Auth** : email+pass maison (jose JWT, middleware). Env Vercel : `AUTH_SECRET`, `APP_USERS`
   = [{"email","pass"}] — comptes soufiane.elourouba@gmail.com et elkarantiissamdine@gmail.com,
@@ -46,13 +46,48 @@ ce qui est l'état actuel en prod. Un badge dans l'en-tête indique le mode : �
   *(Le blocage venait de l'app GitHub Vercel qui n'avait accès qu'au dépôt HostReady-Audit ;
   `sav-dispatch` a été ajouté à sa liste d'accès.)*
 
+## Suivi intra-journée (v1.3, en ligne)
+Statut par intervention et par jour, stocké dans `ticket_days` : `statut` (`fait` / `pas_acces` /
+`reporte`, null = en attente), `motif`, `statut_at`, `source`. La colonne `source` distingue une
+saisie chef d'une remontée WhatsApp — c'est le point d'entrée du bot à venir.
+
+- 3 boutons par intervention + liste de motifs, barre d'avancement par technicien,
+  compteurs « traités aujourd'hui » et « rouges sans nouvelle ».
+- File locale : un statut posé hors ligne repart tout seul au retour du réseau.
+- `getEcarts(jour)` : tickets déclarés faits la veille mais **toujours présents** dans le fichier du
+  matin = intervention réalisée non clôturée/qualifiée côté IAM. C'est du hors-délai payé pour du
+  travail déjà fait. *(Calculé, pas encore affiché dans l'UI — à brancher.)*
+
+## Décision WhatsApp (28/07/2026)
+**Direction retenue : WhatsApp Business Cloud API**, pour la remontée terrain par les techniciens.
+Raison décisive : ils peuvent envoyer **texte, photo et vocal en darija**, sans rien installer —
+ils utilisent déjà l'app IAM et ne veulent pas d'une couche de plus.
+
+- Les boutons/listes interactives WhatsApp ne passent pas à l'échelle (3 boutons, 10 lignes max)
+  pour 30 tickets/technicien. **La bonne approche est le message libre + extraction par IA** contre
+  la liste des tickets déjà attribués au technicien (ensemble candidat court → robuste même avec une
+  transcription darija approximative). Le bot renvoie systématiquement ce qu'il a compris pour
+  confirmation, afin de ne jamais marquer « fait » à tort un ticket qui court vers la pénalité.
+- Le premier message de la journée doit passer par un **modèle pré-approuvé** (règle des 24 h) ;
+  la liste détaillée part ensuite en format libre, gratuitement.
+- **Phase de test : aucune SIM ni vérification nécessaire.** Meta fournit un numéro d'essai gratuit
+  et jusqu'à 5 destinataires enregistrés. Webhook prévu sur `sav-dispatch.vercel.app/api/whatsapp`.
+- App de test à créer sous le portefeuille **Neoclos Maroc** (inutilisé, donc sans risque).
+  Ne pas réutiliser l'app `bnbimmo chat` : la vérification d'entreprise se fait au niveau du
+  portefeuille, et il ne faut pas rattacher du trafic contenant des données d'abonnés IAM à
+  l'activité location courte durée.
+- **Point de non-retour** = enregistrement du vrai numéro + vérification d'entreprise + approbation
+  des modèles. Avant ça, tout est jetable et l'entité porteuse peut encore changer.
+- Risque principal, non technique : les messages partiront d'un numéro professionnel inconnu et non
+  plus du WhatsApp d'Issam. Démarrer avec 1-2 techniciens volontaires, pas les 7 d'un coup.
+
 ## Prochaines étapes (ordre recommandé)
-1. **Feuille SAV_DFO** (dégroupage) : parser et UI déjà en place, seul le mapping de colonnes change. Meilleur rapport valeur/effort.
-2. **Multi-secteur (Anfa)** : ajouter une colonne `secteur` sur `zones` et `techs` + un filtre en tête d'écran. Simple maintenant que la base existe.
-3. **V2 WhatsApp** : API WhatsApp Business Cloud (envoi 1-clic). Le long pole est la vérification Meta
-   (compte Business, numéro dédié, validation des modèles de message) → à lancer en parallèle, très en amont.
-   ⚠️ les modèles imposent un format figé : le récap détaillé par technicien devra être repensé,
-   les liens wa.me restent une bonne solution de repli.
+1. **Bot WhatsApp** — dès que l'app de test Meta existe : webhook `/api/whatsapp`, extraction des
+   statuts depuis texte/vocal/photo, boucle de confirmation, écriture avec `source = 'whatsapp'`.
+   Le socle de statuts est déjà en place, il n'y a que le canal à brancher.
+2. **Afficher les écarts** `getEcarts` dans l'UI (tickets faits mais non clôturés côté IAM).
+3. **Feuille SAV_DFO** (dégroupage) : parser et UI déjà en place, seul le mapping de colonnes change.
+4. **Multi-secteur (Anfa)** : colonne `secteur` sur `zones` et `techs` + filtre en tête d'écran.
 
 ## Données de référence (dossier parent "Projet SAV IAM")
 - `App SAV FTTH/SAV FTTH 3GCOM (1).ods` : exemple du fichier reçu chaque matin (SAV_MT 112 tickets, SAV_DFO)
