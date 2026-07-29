@@ -4,7 +4,7 @@ import { PGlite } from '@electric-sql/pglite';
 import assert from 'node:assert/strict';
 import {
   useSqlClient, getSettings, saveSettings, saveUpload, getDay, assignTickets, getHistory,
-  setStatut, getAvancement, getEcarts, planifier, arbitrer,
+  setStatut, getAvancement, getEcarts, planifier, arbitrer, getHistoriqueTickets,
 } from '../lib/db.js';
 import { DEFAULT_TECHS, DEFAULT_ZONES, DEFAULT_CHEFS } from '../lib/dispatch.js';
 
@@ -297,6 +297,38 @@ const rechargeApres = await saveUpload('2026-09-05', [T('R600', 'MNOC-TAOUZAR', 
 assert.equal(rechargeApres.tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide).length, 0,
   'un rechargement ne fait pas revenir ce qui a ete arbitre');
 ok('les deux decisions vident la liste et survivent au rechargement');
+
+console.log('\n── Nouveau vocabulaire (fait / planifie / blocage) + historique ──');
+await saveUpload('2026-10-01', [T('R700', 'MNOC-TAOUZAR', 1.5)]);
+await setStatut(['R700'], 'blocage', { day: '2026-10-01', motif: 'GC' });
+let j700 = await getDay('2026-10-01');
+assert.equal(j700.statuts.R700.statut, 'blocage');
+assert.equal(j700.statuts.R700.motif, 'GC');
+ok('statut blocage avec motif GC');
+
+await setStatut(['R700'], 'blocage', { day: '2026-10-01', motif: 'Autre', texte: 'Câble arraché par un tiers' });
+j700 = await getDay('2026-10-01');
+assert.equal(j700.statuts.R700.motif, 'Autre');
+assert.equal(j700.statuts.R700.texte, 'Câble arraché par un tiers', 'le texte libre est conserve sur ticket_days');
+ok('blocage "Autre" avec texte libre enregistre');
+
+await setStatut(['R700'], 'planifie', { day: '2026-10-01' });
+j700 = await getDay('2026-10-01');
+assert.equal(j700.statuts.R700.statut, 'planifie');
+ok('statut planifie');
+
+await setStatut(['R700'], 'fait', { day: '2026-10-01' });
+const hist = await getHistoriqueTickets(['R700']);
+assert.equal(hist.R700.length, 4, 'les 4 saisies sont conservees, rien n ecrase l historique');
+assert.equal(hist.R700[0].statut, 'fait', 'la plus recente en tete');
+assert.equal(hist.R700[3].statut, 'blocage', 'la plus ancienne en dernier');
+assert.equal(hist.R700[2].texte, 'Câble arraché par un tiers');
+ok('historique ligne par ligne : rien n est ecrase malgre 4 changements de statut sur le meme ticket');
+
+const j700bis = await getDay('2026-10-01');
+assert.equal(Object.keys(j700bis.historique).length, 1, 'getDay expose l historique du ticket concerne');
+assert.equal(j700bis.historique.R700.length, 4);
+ok('l historique est aussi expose directement par getDay');
 
 await pg.close();
 console.log(`\n✅ ${pass} groupes de vérifications passés — la couche base est saine.\n`);

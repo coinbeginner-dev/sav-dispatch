@@ -11,11 +11,16 @@ import {
 } from '../lib/store';
 
 // Statuts terrain. Aujourd'hui posés par le chef ; demain par la remontée WhatsApp.
-const STATUT_LABEL = { fait: '✅ Fait', pas_acces: '🚪 Pas d\'accès', reporte: '⏭ Reporté' };
-const MOTIFS = {
-  pas_acces: ['Client absent', 'Pas de réponse', 'Refus', 'Adresse introuvable'],
-  reporte: ['RDV pris', 'Câble à remplacer', 'Matériel manquant', 'Nacelle / GC requis', 'Autre'],
+const STATUT_LABEL = {
+  fait: '✅ Fait',
+  planifie: '📅 Planifié Connect',
+  blocage: '⛔ Blocage',
+  // anciennes valeurs encore présentes dans l'historique
+  pas_acces: '🚪 Pas d\'accès',
+  reporte: '⏭ Reporté',
 };
+// Seul le blocage demande une cause : c'est elle qu'on voudra agréger plus tard.
+const MOTIFS = { blocage: ['GC', 'Numéro injoignable', 'Numéro incorrect', 'Autre'] };
 
 export default function Dashboard() {
   const [techs, setTechs] = useState(DEFAULT_TECHS);
@@ -29,6 +34,7 @@ export default function Dashboard() {
   const [showHistory, setShowHistory] = useState(false);
   const [reports, setReports] = useState({});
   const [statuts, setStatuts] = useState({});
+  const [historique, setHistorique] = useState({});
   const [enAttente, setEnAttente] = useState(0);
   const [db, setDb] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -45,6 +51,7 @@ export default function Dashboard() {
         setAssign(s.assign);
         setReports(s.reports);
         setStatuts(s.statuts || {});
+        setHistorique(s.historique || {});
         setFileName('dispatch du jour (base)');
       }
     });
@@ -58,7 +65,7 @@ export default function Dashboard() {
       const s = await loadInitial();
       setDb(s.db); setTechs(s.techs); setZones(s.zones); setChefs(s.chefs);
       setTickets(s.tickets); setAssign(s.assign);
-      setReports(s.reports); setStatuts(s.statuts || {});
+      setReports(s.reports); setStatuts(s.statuts || {}); setHistorique(s.historique || {});
       if (s.tickets.length) setFileName('dispatch du jour (base)');
     } finally { setBusy(false); }
   }
@@ -70,15 +77,23 @@ export default function Dashboard() {
     return () => window.removeEventListener('online', sync);
   }, []);
 
-  function marquerStatut(job, statut, motif) {
+  function marquerStatut(job, statut, motif, texte) {
     const refs = job.tickets.map((t) => t.ref);
     const next = { ...statuts };
+    const hist = { ...historique };
+    const maintenant = new Date();
     for (const r of refs) {
-      if (statut) next[r] = { statut, motif: motif || null, source: 'chef', at: new Date().toISOString() };
-      else delete next[r];
+      if (statut) {
+        next[r] = { statut, motif: motif || null, texte: texte || null, source: 'chef', at: maintenant.toISOString() };
+        hist[r] = [{ statut, motif: motif || null, texte: texte || null, source: 'chef',
+          le: `${String(maintenant.getDate()).padStart(2, '0')}/${String(maintenant.getMonth() + 1).padStart(2, '0')} `
+            + `${String(maintenant.getHours()).padStart(2, '0')}:${String(maintenant.getMinutes()).padStart(2, '0')}` },
+          ...(hist[r] || [])];
+      } else delete next[r];
     }
     setStatuts(next);
-    pushStatut(db, refs, statut, motif).finally(() => setEnAttente(statutsEnAttente()));
+    setHistorique(hist);
+    pushStatut(db, refs, statut, motif, texte).finally(() => setEnAttente(statutsEnAttente()));
   }
 
   async function persistSettings(newTechs, newZones, newChefs) {
@@ -305,7 +320,8 @@ export default function Dashboard() {
           {perTech.unassigned.map((job) => (
             <JobRow key={job.key} job={job} techs={activeTechs} current="" onChange={(v) => reassignJob(job, v)}
               reports={reports} db={db} statut={statuts[job.tickets[0].ref]}
-              onStatut={(s, m) => marquerStatut(job, s, m)} />
+              notes={historique[job.tickets[0].ref]}
+              onStatut={(s, m, t) => marquerStatut(job, s, m, t)} />
           ))}
         </section>
       )}
@@ -354,7 +370,8 @@ export default function Dashboard() {
                       <JobRow key={job.key} job={job} techs={activeTechs} current={tech.name}
                         onChange={(v) => reassignJob(job, v)} reports={reports}
                         db={db} statut={statuts[job.tickets[0].ref]}
-                        onStatut={(s, m) => marquerStatut(job, s, m)} />
+                        notes={historique[job.tickets[0].ref]}
+                        onStatut={(s, m, t) => marquerStatut(job, s, m, t)} />
                     ))}
                   </div>
                 </div>
@@ -407,13 +424,24 @@ function Stat({ n, l, c }) {
   );
 }
 
-function JobRow({ job, techs, current, onChange, reports, db, statut, onStatut }) {
+function JobRow({ job, techs, current, onChange, reports, db, statut, notes, onStatut }) {
   const worst = Math.max(...job.tickets.map((t) => t.delai));
   const rc = retardClass(worst);
   const isSpl = job.type === 'splitter';
   const rep = Math.max(0, ...job.tickets.map((t) => reports[t.ref] || 0));
   const [motifPour, setMotifPour] = useState(null);
+  const [texteAutre, setTexteAutre] = useState('');
+  const [voirHistorique, setVoirHistorique] = useState(false);
   const fait = statut?.statut === 'fait';
+
+  function validerAutre() {
+    const t = texteAutre.trim();
+    if (!t) return;
+    onStatut('blocage', 'Autre', t);
+    setMotifPour(null);
+    setTexteAutre('');
+  }
+
   return (
     <div style={{
       ...S.job,
@@ -449,9 +477,10 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, onStatut }
       {db && statut && (
         <div style={S.statutBar}>
           <span style={{ fontWeight: 700, color: fait ? '#00753A' : '#556' }}>
-            {STATUT_LABEL[statut.statut]}
+            {STATUT_LABEL[statut.statut] || statut.statut}
           </span>
           {statut.motif && <span style={{ color: '#8892A4' }}>· {statut.motif}</span>}
+          {statut.texte && <span style={{ color: '#8892A4' }}>« {statut.texte} »</span>}
           {statut.source === 'whatsapp' && <span style={S.waBadge}>via WhatsApp</span>}
           <button style={S.btnLink} onClick={() => { setMotifPour(null); onStatut(null); }}>annuler</button>
         </div>
@@ -460,19 +489,57 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, onStatut }
       {db && !statut && !motifPour && (
         <div style={S.statutBar}>
           <button style={S.btnStatut} onClick={() => onStatut('fait')}>✅ Fait</button>
-          <button style={S.btnStatut} onClick={() => setMotifPour('pas_acces')}>🚪 Pas d'accès</button>
-          <button style={S.btnStatut} onClick={() => setMotifPour('reporte')}>⏭ Reporté</button>
+          <button style={S.btnStatut} onClick={() => onStatut('planifie')}>📅 Planifié Connect</button>
+          <button style={S.btnStatut} onClick={() => setMotifPour('blocage')}>⛔ Blocage</button>
         </div>
       )}
 
-      {db && !statut && motifPour && (
+      {db && !statut && motifPour === 'blocage' && (
         <div style={S.statutBar}>
-          {MOTIFS[motifPour].map((m) => (
-            <button key={m} style={S.btnMotif} onClick={() => { onStatut(motifPour, m); setMotifPour(null); }}>
+          {MOTIFS.blocage.filter((m) => m !== 'Autre').map((m) => (
+            <button key={m} style={S.btnMotif} onClick={() => { onStatut('blocage', m); setMotifPour(null); }}>
               {m}
             </button>
           ))}
+          <button style={S.btnMotif} onClick={() => setMotifPour('autre')}>Autre</button>
           <button style={S.btnLink} onClick={() => setMotifPour(null)}>retour</button>
+        </div>
+      )}
+
+      {db && !statut && motifPour === 'autre' && (
+        <div style={{ ...S.statutBar, flexDirection: 'column', alignItems: 'stretch' }}>
+          <textarea
+            style={{ ...S.inputSm, width: '100%', minHeight: 50, resize: 'vertical' }}
+            placeholder="Précise le blocage (ce texte reste attaché au ticket)"
+            value={texteAutre}
+            onChange={(e) => setTexteAutre(e.target.value)}
+            autoFocus
+          />
+          <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+            <button style={S.btnSave} onClick={validerAutre} disabled={!texteAutre.trim()}>Enregistrer</button>
+            <button style={S.btnLink} onClick={() => { setMotifPour('blocage'); setTexteAutre(''); }}>retour</button>
+          </div>
+        </div>
+      )}
+
+      {notes?.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <button style={S.btnLink} onClick={() => setVoirHistorique(!voirHistorique)}>
+            {voirHistorique ? 'masquer' : `historique (${notes.length})`}
+          </button>
+          {voirHistorique && (
+            <div style={S.historiqueBox}>
+              {notes.map((n, i) => (
+                <div key={i} style={S.historiqueLigne}>
+                  <span style={{ color: '#8892A4' }}>{n.le}</span>{' '}
+                  <strong>{STATUT_LABEL[n.statut] || n.statut}</strong>
+                  {n.motif && <span> · {n.motif}</span>}
+                  {n.texte && <span> « {n.texte} »</span>}
+                  {n.source && n.source !== 'chef' && <span style={{ color: '#8892A4' }}> ({n.source})</span>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -822,6 +889,11 @@ const S = {
     fontSize: 10, fontWeight: 700, color: '#0B6B33', background: '#D7F5E3',
     padding: '2px 6px', borderRadius: 4,
   },
+  historiqueBox: {
+    marginTop: 4, padding: '6px 8px', background: '#F5F7FA', borderRadius: 6,
+    display: 'flex', flexDirection: 'column', gap: 3,
+  },
+  historiqueLigne: { fontSize: 11, color: '#33415C' },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
   th: {
     textAlign: 'left', padding: '8px 10px', fontSize: 11, textTransform: 'uppercase',

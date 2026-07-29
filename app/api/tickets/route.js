@@ -45,7 +45,8 @@ export async function PATCH(req) {
     }
     if ('statut' in body) {
       const r = await setStatut(body.refs, body.statut, {
-        day, motif: body.motif || null, source: body.source || 'chef',
+        day, motif: body.motif || null, texte: body.texte || null,
+        source: body.source || 'chef',
       });
       return NextResponse.json({ ...r, avancement: await getAvancement(day) });
     }
