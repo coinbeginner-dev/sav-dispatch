@@ -9,6 +9,7 @@ import {
   loadInitial, saveSettings, pushUpload, pushAssign, loadHistory,
   pushStatut, flushStatuts, statutsEnAttente, pushArbitrage, today,
 } from '../lib/store';
+import { lignesExport } from '../lib/export';
 
 // Statuts terrain. Aujourd'hui posés par le chef ; demain par la remontée WhatsApp.
 const STATUT_LABEL = {
@@ -220,33 +221,79 @@ export default function Dashboard() {
     [tickets, rechercheNorm],
   );
 
-  // Export CSV du dispatch du jour : une ligne par ticket, statut et contact
-  // inclus — pour garder une trace hors de l'app (archive, envoi par mail…).
-  function exporterCSV() {
+  // Export Excel du dispatch du jour : une ligne par ticket, mise en couleur
+  // par statut/retard (mêmes codes que les cartes à l'écran), en-tête figé et
+  // filtre automatique — pour un fichier réellement exploitable par l'équipe,
+  // pas un CSV brut sans mise en forme.
+  async function exporterExcel() {
     if (!tickets.length) return;
-    const champ = (v) => {
-      const s = String(v ?? '');
-      return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-    };
-    const entetes = ['Ticket', 'Client', 'Contact', 'MSAN', 'Famille', 'Adresse', 'Délai (j)',
-      'Tranche', 'Équipe', 'Statut', 'Motif', 'Précision', 'Source', 'Mis à jour le',
-      'Hors dispatch', 'Reporté (x jours vu)'];
-    const lignes = tickets.map((t) => {
-      const st = statuts[t.ref];
-      const statutTexte = st ? (STATUT_LABEL[st.statut] || st.statut) : (t.hors_dispatch ? '' : 'En attente');
-      return [
-        t.ref, t.client, t.contact, t.msan, t.famille, t.adresse, t.delai, t.tranche,
-        assign[t.ref] || '', statutTexte, st?.motif || '', st?.texte || '', st?.source || '',
-        st?.at ? new Date(st.at).toLocaleString('fr-FR') : '',
-        t.hors_dispatch ? 'Oui' : 'Non', reports[t.ref] || '',
-      ].map(champ).join(';');
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'SAV Dispatch';
+    wb.created = new Date();
+    const ws = wb.addWorksheet(`Dispatch ${today()}`, {
+      views: [{ state: 'frozen', ySplit: 1 }],
     });
-    const csv = '﻿' + entetes.join(';') + '\n' + lignes.join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+
+    const colonnes = [
+      { header: 'Ticket', key: 'ref', width: 14 },
+      { header: 'Client', key: 'client', width: 30 },
+      { header: 'Contact', key: 'contact', width: 16 },
+      { header: 'MSAN', key: 'msan', width: 24 },
+      { header: 'Famille', key: 'famille', width: 20 },
+      { header: 'Adresse', key: 'adresse', width: 32 },
+      { header: 'Délai (j)', key: 'delai', width: 10 },
+      { header: 'Tranche', key: 'tranche', width: 9 },
+      { header: 'Équipe', key: 'equipe', width: 18 },
+      { header: 'Statut', key: 'statut', width: 18 },
+      { header: 'Motif', key: 'motif', width: 16 },
+      { header: 'Précision', key: 'precision', width: 34 },
+      { header: 'Source', key: 'source', width: 10 },
+      { header: 'Mis à jour le', key: 'maj', width: 16 },
+      { header: 'Hors dispatch', key: 'hors', width: 12 },
+      { header: 'Reporté (x jours vu)', key: 'reporte', width: 10 },
+    ];
+    ws.columns = colonnes;
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: colonnes.length } };
+
+    const entete = ws.getRow(1);
+    entete.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    entete.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F1B3D' } };
+    entete.alignment = { vertical: 'middle' };
+    entete.height = 20;
+
+    // Mêmes couleurs que les cartes à l'écran, pour reconnaître le dispatch
+    // au premier coup d'œil dans Excel.
+    const FOND = {
+      fait: 'FFEAFAF1', planifie: 'FFEAF3FA', blocage: 'FFFEF2F2',
+      hors_dispatch: 'FFF5F7FA', rouge: 'FFFEF2F2', orange: 'FFFFF8EC', vert: 'FFEAFAF1',
+    };
+    const TEXTE = {
+      fait: 'FF00753A', planifie: 'FF0070C0', blocage: 'FFC0392B',
+      rouge: 'FFC0392B', orange: 'FFB87700', vert: 'FF00753A',
+    };
+
+    for (const ligne of lignesExport(tickets, { assign, statuts, reports })) {
+      const { cle, ...donnees } = ligne;
+      const row = ws.addRow(donnees);
+      if (FOND[cle]) {
+        row.eachCell({ includeEmpty: true }, (cell) => {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: FOND[cle] } };
+        });
+      }
+      if (TEXTE[cle]) {
+        row.getCell('delai').font = { bold: true, color: { argb: TEXTE[cle] } };
+        row.getCell('statut').font = { bold: true, color: { argb: TEXTE[cle] } };
+      }
+      row.getCell('ref').font = { bold: true };
+    }
+
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `dispatch_${today()}.csv`;
+    a.download = `dispatch_${today()}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -357,8 +404,8 @@ export default function Dashboard() {
                 <button style={S.btnLink} onClick={() => setRecherche('')}>effacer</button>
               </>
             )}
-            <button style={{ ...S.btnAdd, marginLeft: 'auto' }} onClick={exporterCSV}>
-              ⬇ Exporter (CSV)
+            <button style={{ ...S.btnAdd, marginLeft: 'auto' }} onClick={exporterExcel}>
+              ⬇ Exporter (Excel)
             </button>
           </div>
         )}
