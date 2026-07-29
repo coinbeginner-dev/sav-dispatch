@@ -6,6 +6,7 @@ import {
   useSqlClient, getSettings, saveSettings, saveUpload, getDay, assignTickets, getHistory,
   setStatut, getAvancement, getEcarts, planifier,
 } from '../lib/db.js';
+import { DEFAULT_TECHS, DEFAULT_ZONES, DEFAULT_CHEFS } from '../lib/dispatch.js';
 
 // ── Shim : reproduit l'API tagged-template du driver Neon sur PGlite ──
 function makeSql(pg) {
@@ -57,10 +58,12 @@ useSqlClient(makeSql(pg));
 
 console.log('\n── Réglages ──');
 const s0 = await getSettings();
-assert.equal(s0.techs.length, 7, 'seed techniciens');
-assert.equal(s0.zones.length, 14, 'seed zones');
-assert.equal(s0.chefs.length, 1, 'seed chefs');
-ok('schéma créé et réglages par défaut seedés');
+assert.equal(s0.techs.length, DEFAULT_TECHS.length, 'seed equipes');
+assert.equal(s0.zones.length, DEFAULT_ZONES.length, 'seed zones');
+assert.equal(s0.chefs.length, DEFAULT_CHEFS.length, 'seed chefs');
+assert.ok(s0.techs.every((t) => 'compte' in t), 'le compte IAM est expose');
+assert.ok(s0.techs.some((t) => t.compte), 'au moins une equipe a un compte IAM');
+ok('schéma créé et réglages par défaut seedés, compte IAM inclus');
 
 const s1 = await saveSettings({
   chefs: [{ name: 'Soufiane', phone: '212600000001' }, { name: 'Issam', phone: '212600000002' }],

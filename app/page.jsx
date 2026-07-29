@@ -524,12 +524,14 @@ function Settings({ techs, zones, chefs, onSave, onClose }) {
 
         {tab === 'techs' && (
           <div>
-            <p style={S.hint}>Numéro au format international sans + ni espaces (ex. 212661234567). Chaque équipe est identifiée par le nom de son TL et rattachée à un chef d'équipe.</p>
+            <p style={S.hint}>Numéro au format international sans + ni espaces (ex. 212661234567). Chaque équipe est identifiée par le nom de son TL, avec son compte IAM, et rattachée à un chef d'équipe. Le numéro WhatsApp est au format international sans + ni espaces.</p>
             {dTechs.map((t, i) => (
               <div key={i} style={S.settingRow}>
-                <input style={{ ...S.inputSm, width: 110 }} placeholder="Nom (TL)" value={t.name}
+                <input style={{ ...S.inputSm, width: 150 }} placeholder="Nom (TL)" value={t.name}
                   onChange={(e) => setT(dTechs.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
-                <input style={{ ...S.inputSm, flex: 1, minWidth: 120 }} placeholder="N° WhatsApp" value={t.phone}
+                <input style={{ ...S.inputSm, flex: 1, minWidth: 170 }} placeholder="Compte IAM" value={t.compte || ''}
+                  onChange={(e) => setT(dTechs.map((x, j) => j === i ? { ...x, compte: e.target.value } : x))} />
+                <input style={{ ...S.inputSm, width: 130 }} placeholder="N° WhatsApp" value={t.phone}
                   onChange={(e) => setT(dTechs.map((x, j) => j === i ? { ...x, phone: e.target.value } : x))} />
                 <select style={{ ...S.inputSm, width: 130 }} value={t.chef || ''}
                   onChange={(e) => setT(dTechs.map((x, j) => j === i ? { ...x, chef: e.target.value } : x))}>
@@ -544,7 +546,7 @@ function Settings({ techs, zones, chefs, onSave, onClose }) {
                 <button style={S.btnDel} title="Supprimer" onClick={() => setT(dTechs.filter((_, j) => j !== i))}>🗑</button>
               </div>
             ))}
-            <button style={S.btnAdd} onClick={() => setT([...dTechs, { name: '', phone: '', active: true, chef: dChefs[0]?.name || '' }])}>
+            <button style={S.btnAdd} onClick={() => setT([...dTechs, { name: '', compte: '', phone: '', active: true, chef: dChefs[0]?.name || '' }])}>
               + Ajouter une équipe
             </button>
           </div>
