@@ -7,7 +7,7 @@ import {
 } from '../lib/dispatch';
 import {
   loadInitial, saveSettings, pushUpload, pushAssign, loadHistory,
-  pushStatut, flushStatuts, statutsEnAttente, pushArbitrage,
+  pushStatut, flushStatuts, statutsEnAttente, pushArbitrage, today,
 } from '../lib/store';
 
 // Statuts terrain. Aujourd'hui posés par le chef ; demain par la remontée WhatsApp.
@@ -38,6 +38,7 @@ export default function Dashboard() {
   const [enAttente, setEnAttente] = useState(0);
   const [db, setDb] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [recherche, setRecherche] = useState('');
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -206,6 +207,50 @@ export default function Dashboard() {
       reportes: Object.keys(reports).length };
   }, [tickets, reports, statuts]);
 
+  // Recherche par n° de ticket ou nom de client : sert surtout à retrouver
+  // sous quelle équipe est tombé un ticket précis, sans parcourir 9 colonnes.
+  const rechercheNorm = recherche.trim().toLowerCase();
+  const matchTicket = (t) => !rechercheNorm
+    || t.ref.toLowerCase().includes(rechercheNorm)
+    || (t.client || '').toLowerCase().includes(rechercheNorm);
+  const matchJob = (j) => j.tickets.some(matchTicket);
+  const resultatsRecherche = useMemo(
+    () => (rechercheNorm ? tickets.filter(matchTicket) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tickets, rechercheNorm],
+  );
+
+  // Export CSV du dispatch du jour : une ligne par ticket, statut et contact
+  // inclus — pour garder une trace hors de l'app (archive, envoi par mail…).
+  function exporterCSV() {
+    if (!tickets.length) return;
+    const champ = (v) => {
+      const s = String(v ?? '');
+      return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const entetes = ['Ticket', 'Client', 'Contact', 'MSAN', 'Famille', 'Adresse', 'Délai (j)',
+      'Tranche', 'Équipe', 'Statut', 'Motif', 'Précision', 'Source', 'Mis à jour le',
+      'Hors dispatch', 'Reporté (x jours vu)'];
+    const lignes = tickets.map((t) => {
+      const st = statuts[t.ref];
+      const statutTexte = st ? (STATUT_LABEL[st.statut] || st.statut) : (t.hors_dispatch ? '' : 'En attente');
+      return [
+        t.ref, t.client, t.contact, t.msan, t.famille, t.adresse, t.delai, t.tranche,
+        assign[t.ref] || '', statutTexte, st?.motif || '', st?.texte || '', st?.source || '',
+        st?.at ? new Date(st.at).toLocaleString('fr-FR') : '',
+        t.hors_dispatch ? 'Oui' : 'Non', reports[t.ref] || '',
+      ].map(champ).join(';');
+    });
+    const csv = '﻿' + entetes.join(';') + '\n' + lignes.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `dispatch_${today()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function reassignJob(job, newTech) {
     const next = { ...assign };
     const refs = job.tickets.map((t) => t.ref);
@@ -295,6 +340,28 @@ export default function Dashboard() {
             {db && <Stat n={stats.rougesEnAttente} l="⏳ Rouges sans nouvelle" c="#C0392B" />}
           </div>
         )}
+
+        {tickets.length > 0 && (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 14 }}>
+            <input
+              style={{ ...S.inputSm, minWidth: 260 }}
+              placeholder="🔍 Chercher un n° de ticket ou un client — pour savoir chez quelle équipe il se trouve"
+              value={recherche}
+              onChange={(e) => setRecherche(e.target.value)}
+            />
+            {recherche.trim() && (
+              <>
+                <span style={{ fontSize: 12, color: '#8892A4' }}>
+                  {resultatsRecherche.length} résultat{resultatsRecherche.length > 1 ? 's' : ''}
+                </span>
+                <button style={S.btnLink} onClick={() => setRecherche('')}>effacer</button>
+              </>
+            )}
+            <button style={{ ...S.btnAdd, marginLeft: 'auto' }} onClick={exporterCSV}>
+              ⬇ Exporter (CSV)
+            </button>
+          </div>
+        )}
       </section>
 
       {/* Arbitrage du matin : tickets déjà renseignés un jour précédent */}
@@ -320,7 +387,7 @@ export default function Dashboard() {
             envoyés aux équipes. Un ticket déjà fait qui réapparaît attend en général une clôture
             côté IAM, pas une nouvelle intervention.
           </p>
-          {aArbitrer.map((job) => (
+          {aArbitrer.filter((j) => !rechercheNorm || matchJob(j)).map((job) => (
             <ArbitrageRow key={job.key} job={job} techs={activeTechs}
               current={assign[job.tickets[0].ref] || ''}
               onChange={(v) => reassignJob(job, v)}
@@ -333,7 +400,7 @@ export default function Dashboard() {
       {perTech.unassignedTickets.length > 0 && (
         <section style={{ ...S.card, borderLeft: '4px solid #C0392B' }}>
           <h3 style={{ ...S.h3, color: '#C0392B' }}>⚠ Non affectés ({perTech.unassignedTickets.length}) — MSAN inconnu ou équipe inactive</h3>
-          {perTech.unassigned.map((job) => (
+          {perTech.unassigned.filter((j) => !rechercheNorm || matchJob(j)).map((job) => (
             <JobRow key={job.key} job={job} techs={activeTechs} current="" onChange={(v) => reassignJob(job, v)}
               reports={reports} db={db} statut={statuts[job.tickets[0].ref]}
               notes={historique[job.tickets[0].ref]}
@@ -351,7 +418,7 @@ export default function Dashboard() {
               const maxLoad = Math.max(1, ...activeTechs.map((x) => (perTech.map[x.name] || []).reduce((s, j) => s + j.tickets.length, 0)));
               return (
                 <TechColumn key={tech.name} tech={tech} jobs={jobs} statuts={statuts} historique={historique}
-                  reports={reports} techs={activeTechs} db={db} maxLoad={maxLoad}
+                  reports={reports} techs={activeTechs} db={db} maxLoad={maxLoad} filtre={rechercheNorm}
                   onChange={reassignJob} onStatut={marquerStatut} onSend={() => sendTech(tech.name)} />
               );
             })}
@@ -406,7 +473,7 @@ function Stat({ n, l, c }) {
 // mélangées aux tickets encore à faire, elles faussaient la lecture visuelle
 // et le calcul du "reste à faire" par équipe. Elles passent dans un tiroir
 // replié en bas de colonne, consultable sans polluer la vue de travail.
-function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLoad, onChange, onStatut, onSend }) {
+function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLoad, filtre, onChange, onStatut, onSend }) {
   const [voirFaits, setVoirFaits] = useState(false);
 
   const todo = [];
@@ -423,6 +490,17 @@ function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLo
   // c'est l'avancement du reporting de la journée, distinct du "reste à faire".
   const renseignees = jobs.filter((j) => statuts[j.tickets[0].ref]).length;
 
+  // Recherche : ne garde que les interventions correspondantes. Si l'équipe
+  // n'a aucun résultat, sa colonne entière disparaît — c'est ainsi que
+  // l'orienteur voit d'un coup d'œil chez quelle équipe se trouve un ticket.
+  const correspond = (job) => job.tickets.some((t) =>
+    t.ref.toLowerCase().includes(filtre) || (t.client || '').toLowerCase().includes(filtre));
+  const todoAffiches = filtre ? todo.filter(correspond) : todo;
+  const doneAffiches = filtre ? done.filter(correspond) : done;
+  if (filtre && todoAffiches.length === 0 && doneAffiches.length === 0) return null;
+  // Un résultat caché dans le tiroir "traités" doit être visible sans clic.
+  const faitsOuverts = filtre ? doneAffiches.length > 0 : voirFaits;
+
   return (
     <div style={S.techCol}>
       <div style={S.techHead}>
@@ -434,6 +512,7 @@ function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLo
             {done.length > 0 ? ` · ${done.length} fait${done.length > 1 ? 's' : ''}` : ''}
             {rouges ? ` · 🔴${rouges}` : ''}
           </span>
+          {filtre && <span style={S.waBadge}>🔍 trouvé ici</span>}
         </div>
         <button style={S.btnWa} onClick={onSend} disabled={!ntTodo}>
           📱 WhatsApp
@@ -455,19 +534,21 @@ function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLo
       )}
       {!tech.phone && nt > 0 && <div style={S.warnSmall}>⚠ numéro WhatsApp manquant</div>}
       <div style={{ maxHeight: 420, overflowY: 'auto' }}>
-        {todo.map((job) => (
+        {todoAffiches.map((job) => (
           <JobRow key={job.key} job={job} techs={techs} current={tech.name}
             onChange={(v) => onChange(job, v)} reports={reports}
             db={db} statut={statuts[job.tickets[0].ref]}
             notes={historique[job.tickets[0].ref]}
             onStatut={(s, m, t) => onStatut(job, s, m, t)} />
         ))}
-        {done.length > 0 && (
+        {doneAffiches.length > 0 && (
           <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #D7DCE5' }}>
-            <button style={S.btnLink} onClick={() => setVoirFaits(!voirFaits)}>
-              {voirFaits ? 'masquer' : `✅ ${done.length} traité${done.length > 1 ? 's' : ''} aujourd'hui — afficher`}
-            </button>
-            {voirFaits && done.map((job) => (
+            {!filtre && (
+              <button style={S.btnLink} onClick={() => setVoirFaits(!voirFaits)}>
+                {voirFaits ? 'masquer' : `✅ ${done.length} traité${done.length > 1 ? 's' : ''} aujourd'hui — afficher`}
+              </button>
+            )}
+            {faitsOuverts && doneAffiches.map((job) => (
               <JobRow key={job.key} job={job} techs={techs} current={tech.name}
                 onChange={(v) => onChange(job, v)} reports={reports}
                 db={db} statut={statuts[job.tickets[0].ref]}
