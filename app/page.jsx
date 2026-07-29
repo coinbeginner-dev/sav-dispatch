@@ -585,6 +585,14 @@ function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLo
   // c'est l'avancement du reporting de la journée, distinct du "reste à faire".
   const renseignees = jobs.filter((j) => statuts[j.tickets[0].ref]).length;
 
+  // Même répartition que le bandeau global (Total / Fait / Planifié /
+  // À planifier / Blocage), comptée en tickets pour rester cohérente avec lui.
+  const tousLesTickets = jobs.flatMap((j) => j.tickets);
+  const nFait = tousLesTickets.filter((t) => statuts[t.ref]?.statut === 'fait').length;
+  const nPlanifie = tousLesTickets.filter((t) => statuts[t.ref]?.statut === 'planifie').length;
+  const nBlocage = tousLesTickets.filter((t) => statuts[t.ref]?.statut === 'blocage').length;
+  const nAPlanifier = nt - nFait - nPlanifie - nBlocage;
+
   // Recherche : ne garde que les interventions correspondantes. Si l'équipe
   // n'a aucun résultat, sa colonne entière disparaît — c'est ainsi que
   // l'orienteur voit d'un coup d'œil chez quelle équipe se trouve un ticket.
@@ -602,17 +610,22 @@ function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLo
         <div>
           <strong>{tech.name}</strong>
           {tech.chef && <span style={S.chefBadge}>{tech.chef}</span>}
-          <span style={{ fontSize: 12, color: '#8892A4', marginLeft: 8 }}>
-            {todo.length} restant{todo.length > 1 ? 's' : ''}
-            {done.length > 0 ? ` · ${done.length} fait${done.length > 1 ? 's' : ''}` : ''}
-            {rouges ? ` · 🔴${rouges}` : ''}
-          </span>
+          {rouges > 0 && <span style={{ fontSize: 12, color: '#C0392B', marginLeft: 8 }}>🔴{rouges}</span>}
           {filtre && <span style={S.waBadge}>🔍 trouvé ici</span>}
         </div>
         <button style={S.btnWa} onClick={onSend} disabled={!ntTodo}>
           📱 WhatsApp
         </button>
       </div>
+      {nt > 0 && (
+        <div style={{ fontSize: 11, color: '#556', marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
+          <span>Total <strong>{nt}</strong></span>
+          <span style={{ color: '#00753A' }}>Fait <strong>{nFait}</strong></span>
+          <span style={{ color: '#0070C0' }}>Planifié <strong>{nPlanifie}</strong></span>
+          <span style={{ color: '#0F1B3D' }}>À planifier <strong>{nAPlanifier}</strong></span>
+          <span style={{ color: '#C0392B' }}>Blocage <strong>{nBlocage}</strong></span>
+        </div>
+      )}
       {db && jobs.length > 0 ? (
         <>
           <div style={S.loadBarBg}>
