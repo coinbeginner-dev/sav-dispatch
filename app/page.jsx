@@ -206,11 +206,18 @@ export default function Dashboard() {
   }
 
   // ── WhatsApp ──────────────────────────────────────────────
+  // Un ticket marqué "Fait" n'a plus rien à faire sur le terrain : on ne le
+  // renvoie pas dans les messages, sinon l'équipe reçoit des interventions
+  // déjà closes et le dispatch perd toute lisibilité.
+  function jobsRestants(techName) {
+    return (perTech.map[techName] || []).filter((j) => statuts[j.tickets[0].ref]?.statut !== 'fait');
+  }
+
   function sendTech(techName) {
     const tech = techs.find((t) => t.name === techName);
     if (!tech?.phone) { alert(`Pas de numéro WhatsApp pour ${techName}. Ajoute-le dans Réglages.`); return; }
-    const jobs = perTech.map[techName] || [];
-    if (!jobs.length) { alert(`Aucun ticket pour ${techName}.`); return; }
+    const jobs = jobsRestants(techName);
+    if (!jobs.length) { alert(`Aucun ticket restant pour ${techName}.`); return; }
     const msg = buildTechMessage(techName, jobs, dateStr);
     window.open(waLink(tech.phone, msg), '_blank');
   }
@@ -220,10 +227,10 @@ export default function Dashboard() {
     const filled = {};
     for (const t of activeTechs) {
       if ((t.chef || '') !== chef.name) continue;
-      const jobs = perTech.map[t.name] || [];
+      const jobs = jobsRestants(t.name);
       if (jobs.length) filled[t.name] = jobs;
     }
-    if (!Object.keys(filled).length) { alert(`Aucune intervention pour les équipes de ${chef.name}.`); return; }
+    if (!Object.keys(filled).length) { alert(`Aucune intervention restante pour les équipes de ${chef.name}.`); return; }
     const msg = buildChefMessage(filled, dateStr, perTech.unassignedTickets.length, chef.name);
     window.open(waLink(chef.phone, msg), '_blank');
   }
@@ -332,49 +339,11 @@ export default function Dashboard() {
           <section style={S.techGrid}>
             {activeTechs.map((tech) => {
               const jobs = perTech.map[tech.name] || [];
-              const nt = jobs.reduce((s, j) => s + j.tickets.length, 0);
-              const rouges = jobs.reduce((s, j) => s + j.tickets.filter((t) => t.delai >= 2).length, 0);
               const maxLoad = Math.max(1, ...activeTechs.map((x) => (perTech.map[x.name] || []).reduce((s, j) => s + j.tickets.length, 0)));
-              const traites = jobs.filter((j) => statuts[j.tickets[0].ref]).length;
               return (
-                <div key={tech.name} style={S.techCol}>
-                  <div style={S.techHead}>
-                    <div>
-                      <strong>{tech.name}</strong>
-                      {tech.chef && <span style={S.chefBadge}>{tech.chef}</span>}
-                      <span style={{ fontSize: 12, color: '#8892A4', marginLeft: 8 }}>
-                        {nt} tickets · {jobs.length} interv.{rouges ? ` · 🔴${rouges}` : ''}
-                      </span>
-                    </div>
-                    <button style={S.btnWa} onClick={() => sendTech(tech.name)} disabled={!nt}>
-                      📱 WhatsApp
-                    </button>
-                  </div>
-                  {db && jobs.length > 0 ? (
-                    <>
-                      <div style={S.loadBarBg}>
-                        <div style={{ ...S.loadBar, width: `${(traites / jobs.length) * 100}%`, background: '#00963F' }} />
-                      </div>
-                      <div style={{ fontSize: 11, color: '#8892A4', marginBottom: 8 }}>
-                        {traites}/{jobs.length} interventions renseignées
-                      </div>
-                    </>
-                  ) : (
-                    <div style={S.loadBarBg}>
-                      <div style={{ ...S.loadBar, width: `${(nt / maxLoad) * 100}%`, background: nt > 15 ? '#C0392B' : '#E8841A' }} />
-                    </div>
-                  )}
-                  {!tech.phone && nt > 0 && <div style={S.warnSmall}>⚠ numéro WhatsApp manquant</div>}
-                  <div style={{ maxHeight: 420, overflowY: 'auto' }}>
-                    {jobs.map((job) => (
-                      <JobRow key={job.key} job={job} techs={activeTechs} current={tech.name}
-                        onChange={(v) => reassignJob(job, v)} reports={reports}
-                        db={db} statut={statuts[job.tickets[0].ref]}
-                        notes={historique[job.tickets[0].ref]}
-                        onStatut={(s, m, t) => marquerStatut(job, s, m, t)} />
-                    ))}
-                  </div>
-                </div>
+                <TechColumn key={tech.name} tech={tech} jobs={jobs} statuts={statuts} historique={historique}
+                  reports={reports} techs={activeTechs} db={db} maxLoad={maxLoad}
+                  onChange={reassignJob} onStatut={marquerStatut} onSend={() => sendTech(tech.name)} />
               );
             })}
           </section>
@@ -420,6 +389,85 @@ function Stat({ n, l, c }) {
     <div style={S.stat}>
       <div style={{ fontSize: 26, fontWeight: 800, color: c }}>{n}</div>
       <div style={{ fontSize: 11, color: '#8892A4' }}>{l}</div>
+    </div>
+  );
+}
+
+// Colonne d'une équipe. Les interventions "Fait" sont séparées du reste :
+// mélangées aux tickets encore à faire, elles faussaient la lecture visuelle
+// et le calcul du "reste à faire" par équipe. Elles passent dans un tiroir
+// replié en bas de colonne, consultable sans polluer la vue de travail.
+function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLoad, onChange, onStatut, onSend }) {
+  const [voirFaits, setVoirFaits] = useState(false);
+
+  const todo = [];
+  const done = [];
+  for (const job of jobs) {
+    if (statuts[job.tickets[0].ref]?.statut === 'fait') done.push(job);
+    else todo.push(job);
+  }
+
+  const nt = jobs.reduce((s, j) => s + j.tickets.length, 0);
+  const ntTodo = todo.reduce((s, j) => s + j.tickets.length, 0);
+  const rouges = todo.reduce((s, j) => s + j.tickets.filter((t) => t.delai >= 2).length, 0);
+  // "renseignées" = a reçu un statut, quel qu'il soit (fait, planifié, blocage) :
+  // c'est l'avancement du reporting de la journée, distinct du "reste à faire".
+  const renseignees = jobs.filter((j) => statuts[j.tickets[0].ref]).length;
+
+  return (
+    <div style={S.techCol}>
+      <div style={S.techHead}>
+        <div>
+          <strong>{tech.name}</strong>
+          {tech.chef && <span style={S.chefBadge}>{tech.chef}</span>}
+          <span style={{ fontSize: 12, color: '#8892A4', marginLeft: 8 }}>
+            {todo.length} restant{todo.length > 1 ? 's' : ''}
+            {done.length > 0 ? ` · ${done.length} fait${done.length > 1 ? 's' : ''}` : ''}
+            {rouges ? ` · 🔴${rouges}` : ''}
+          </span>
+        </div>
+        <button style={S.btnWa} onClick={onSend} disabled={!ntTodo}>
+          📱 WhatsApp
+        </button>
+      </div>
+      {db && jobs.length > 0 ? (
+        <>
+          <div style={S.loadBarBg}>
+            <div style={{ ...S.loadBar, width: `${(renseignees / jobs.length) * 100}%`, background: '#00963F' }} />
+          </div>
+          <div style={{ fontSize: 11, color: '#8892A4', marginBottom: 8 }}>
+            {renseignees}/{jobs.length} interventions renseignées
+          </div>
+        </>
+      ) : (
+        <div style={S.loadBarBg}>
+          <div style={{ ...S.loadBar, width: `${(nt / maxLoad) * 100}%`, background: nt > 15 ? '#C0392B' : '#E8841A' }} />
+        </div>
+      )}
+      {!tech.phone && nt > 0 && <div style={S.warnSmall}>⚠ numéro WhatsApp manquant</div>}
+      <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+        {todo.map((job) => (
+          <JobRow key={job.key} job={job} techs={techs} current={tech.name}
+            onChange={(v) => onChange(job, v)} reports={reports}
+            db={db} statut={statuts[job.tickets[0].ref]}
+            notes={historique[job.tickets[0].ref]}
+            onStatut={(s, m, t) => onStatut(job, s, m, t)} />
+        ))}
+        {done.length > 0 && (
+          <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #D7DCE5' }}>
+            <button style={S.btnLink} onClick={() => setVoirFaits(!voirFaits)}>
+              {voirFaits ? 'masquer' : `✅ ${done.length} traité${done.length > 1 ? 's' : ''} aujourd'hui — afficher`}
+            </button>
+            {voirFaits && done.map((job) => (
+              <JobRow key={job.key} job={job} techs={techs} current={tech.name}
+                onChange={(v) => onChange(job, v)} reports={reports}
+                db={db} statut={statuts[job.tickets[0].ref]}
+                notes={historique[job.tickets[0].ref]}
+                onStatut={(s, m, t) => onStatut(job, s, m, t)} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
