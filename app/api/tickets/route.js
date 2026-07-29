@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import {
-  hasDb, getDay, saveUpload, assignTickets, setStatut, getAvancement, planifier,
+  hasDb, getDay, saveUpload, assignTickets, setStatut, getAvancement, arbitrer,
 } from '../../../lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -40,8 +40,8 @@ export async function PATCH(req) {
   try {
     const body = await req.json();
     const day = body.day || today();
-    if ('planifier' in body) {
-      return NextResponse.json(await planifier(body.refs, day, body.planifier !== false));
+    if ('arbitrage' in body) {
+      return NextResponse.json(await arbitrer(body.refs, day, body.arbitrage));
     }
     if ('statut' in body) {
       const r = await setStatut(body.refs, body.statut, {

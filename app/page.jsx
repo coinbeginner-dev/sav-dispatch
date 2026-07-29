@@ -7,7 +7,7 @@ import {
 } from '../lib/dispatch';
 import {
   loadInitial, saveSettings, pushUpload, pushAssign, loadHistory,
-  pushStatut, flushStatuts, statutsEnAttente, pushPlanifier,
+  pushStatut, flushStatuts, statutsEnAttente, pushArbitrage,
 } from '../lib/store';
 
 // Statuts terrain. Aujourd'hui posés par le chef ; demain par la remontée WhatsApp.
@@ -116,11 +116,19 @@ export default function Dashboard() {
     }
   }
 
-  // Remet un ticket arbitré dans le dispatch du jour
-  function planifierJob(job) {
+  // Arbitrage : soit le ticket repart chez son équipe, soit on acte qu'il est
+  // traité et il quitte la liste au lieu d'y revenir chaque matin.
+  function arbitrerJob(job, decision) {
     const refs = job.tickets.map((t) => t.ref);
-    setTickets(tickets.map((t) => (refs.includes(t.ref) ? { ...t, hors_dispatch: false } : t)));
-    pushPlanifier(db, refs, true).catch(() => {});
+    setTickets(tickets.map((t) => (refs.includes(t.ref)
+      ? { ...t, hors_dispatch: decision === 'cloturer', arbitrage_decide: true }
+      : t)));
+    if (decision === 'cloturer') {
+      const next = { ...statuts };
+      for (const r of refs) next[r] = { statut: 'fait', motif: job.tickets[0].arbitrage_motif, source: 'orienteur' };
+      setStatuts(next);
+    }
+    pushArbitrage(db, refs, decision).catch(() => {});
   }
 
   // ── Distribution ──────────────────────────────────────────
@@ -129,7 +137,7 @@ export default function Dashboard() {
   // Tickets déjà renseignés un jour précédent : ils reviennent dans le fichier
   // mais ne partent pas aux équipes tant que l'orienteur n'a pas tranché.
   const aArbitrer = useMemo(
-    () => buildJobs(tickets.filter((t) => t.hors_dispatch)),
+    () => buildJobs(tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide)),
     [tickets],
   );
 
@@ -248,9 +256,14 @@ export default function Dashboard() {
               ⚖ À arbitrer — {aArbitrer.reduce((s, j) => s + j.tickets.length, 0)} tickets
               {' '}en {aArbitrer.length} intervention{aArbitrer.length > 1 ? 's' : ''}
             </h3>
-            <button style={S.btnAdd} onClick={() => aArbitrer.forEach(planifierJob)}>
-              Tout planifier
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={S.btnAdd} onClick={() => aArbitrer.forEach((j) => arbitrerJob(j, 'planifier'))}>
+                Tout planifier
+              </button>
+              <button style={S.btnAdd} onClick={() => aArbitrer.forEach((j) => arbitrerJob(j, 'cloturer'))}>
+                Tout clôturer
+              </button>
+            </div>
           </div>
           <p style={S.hint}>
             Ces tickets sont revenus dans le fichier alors qu'ils avaient déjà un statut.
@@ -262,7 +275,7 @@ export default function Dashboard() {
             <ArbitrageRow key={job.key} job={job} techs={activeTechs}
               current={assign[job.tickets[0].ref] || ''}
               onChange={(v) => reassignJob(job, v)}
-              onPlanifier={() => planifierJob(job)} />
+              onArbitrer={(d) => arbitrerJob(job, d)} />
           ))}
         </section>
       )}
@@ -451,7 +464,7 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, onStatut }
 // Ticket revenu dans le fichier alors qu'il avait déjà un statut.
 // L'orienteur voit ce qui a été déclaré, par qui et quand, choisit l'équipe,
 // puis décide de le remettre ou non dans la distribution du jour.
-function ArbitrageRow({ job, techs, current, onChange, onPlanifier }) {
+function ArbitrageRow({ job, techs, current, onChange, onArbitrer }) {
   const t = job.tickets[0];
   const LIB = { fait: '✅ déclaré fait', pas_acces: "🚪 pas d'accès", reporte: '⏭ reporté' };
   const jour = t.arbitrage_le ? t.arbitrage_le.split('-').reverse().join('/') : '';
@@ -474,7 +487,9 @@ function ArbitrageRow({ job, techs, current, onChange, onPlanifier }) {
             <option value="">— équipe —</option>
             {techs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}
           </select>
-          <button style={S.btnSave} onClick={onPlanifier}>Planifier</button>
+          <button style={S.btnSave} onClick={() => onArbitrer('planifier')}>Planifier</button>
+          <button style={S.btnStatut} title="Ne sera pas planifié : acté comme traité"
+            onClick={() => onArbitrer('cloturer')}>Clôturer</button>
         </div>
       </div>
     </div>
