@@ -32,6 +32,7 @@ export default function Dashboard() {
   const [enAttente, setEnAttente] = useState(0);
   const [db, setDb] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [envoi, setEnvoi] = useState(null);
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -49,6 +50,19 @@ export default function Dashboard() {
       }
     });
   }, []);
+
+  // Recharge l'état réel depuis la base. Sans ça, deux onglets ou deux
+  // personnes travaillent sur des vues divergentes sans le savoir.
+  async function rafraichir() {
+    setBusy(true);
+    try {
+      const s = await loadInitial();
+      setDb(s.db); setTechs(s.techs); setZones(s.zones); setChefs(s.chefs);
+      setTickets(s.tickets); setAssign(s.assign);
+      setReports(s.reports); setStatuts(s.statuts || {});
+      if (s.tickets.length) setFileName('dispatch du jour (base)');
+    } finally { setBusy(false); }
+  }
 
   // Statuts posés hors ligne : on repart à la reconnexion
   useEffect(() => {
@@ -128,7 +142,7 @@ export default function Dashboard() {
       for (const r of refs) next[r] = { statut: 'fait', motif: job.tickets[0].arbitrage_motif, source: 'orienteur' };
       setStatuts(next);
     }
-    pushArbitrage(db, refs, decision).catch(() => {});
+    pushArbitrage(db, refs, decision).catch((e) => alert(`Arbitrage non enregistré : ${e.message}. Rafraîchis la page.`));
   }
 
   // ── Distribution ──────────────────────────────────────────
@@ -174,7 +188,7 @@ export default function Dashboard() {
     const refs = job.tickets.map((t) => t.ref);
     for (const r of refs) next[r] = newTech || null;
     setAssign(next);
-    pushAssign(db, refs, newTech).catch(() => {});
+    pushAssign(db, refs, newTech).catch((e) => alert(`Réaffectation non enregistrée : ${e.message}. Rafraîchis la page.`));
   }
 
   // ── WhatsApp ──────────────────────────────────────────────
@@ -184,7 +198,7 @@ export default function Dashboard() {
     const jobs = perTech.map[techName] || [];
     if (!jobs.length) { alert(`Aucun ticket pour ${techName}.`); return; }
     const msg = buildTechMessage(techName, jobs, dateStr);
-    for (const part of splitMessage(msg)) window.open(waLink(tech.phone, part), '_blank');
+    setEnvoi({ nom: techName, phone: tech.phone, texte: msg, parts: splitMessage(msg) });
   }
 
   function sendChef(chef) {
@@ -197,7 +211,7 @@ export default function Dashboard() {
     }
     if (!Object.keys(filled).length) { alert(`Aucune intervention pour les équipes de ${chef.name}.`); return; }
     const msg = buildChefMessage(filled, dateStr, perTech.unassignedTickets.length, chef.name);
-    for (const part of splitMessage(msg)) window.open(waLink(chef.phone, part), '_blank');
+    setEnvoi({ nom: chef.name, phone: chef.phone, texte: msg, parts: splitMessage(msg) });
   }
 
   // ── Rendu ─────────────────────────────────────────────────
@@ -220,6 +234,7 @@ export default function Dashboard() {
               ⏳ {enAttente} statut(s) en attente
             </span>
           )}
+          {db && <button style={S.btnGhost} onClick={rafraichir} disabled={busy}>↻ Rafraîchir</button>}
           {db && <button style={S.btnGhost} onClick={() => setShowHistory(true)}>📊 Historique</button>}
           <button style={S.btnGhost} onClick={() => setShowSettings(true)}>⚙ Réglages</button>
           <a href="/api/logout" style={{ ...S.btnGhost, textDecoration: 'none' }}>Déconnexion</a>
@@ -379,6 +394,8 @@ export default function Dashboard() {
       )}
 
       {showHistory && <History onClose={() => setShowHistory(false)} />}
+
+      {envoi && <Envoi envoi={envoi} onClose={() => setEnvoi(null)} />}
     </div>
   );
 }
@@ -461,6 +478,66 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, onStatut }
           <button style={S.btnLink} onClick={() => setMotifPour(null)}>retour</button>
         </div>
       )}
+    </div>
+  );
+}
+
+// Envoi WhatsApp. Un long dispatch dépasse ce qu'un seul message peut porter :
+// il faut donc l'envoyer en plusieurs fois. Ouvrir toutes les fenêtres d'un coup
+// ne marche pas — le navigateur bloque tout sauf la première, et seule une
+// partie du dispatch partait sans que personne ne s'en aperçoive.
+// Ici chaque partie part sur un clic, donc rien n'est bloqué, et on voit
+// clairement ce qui a été envoyé et ce qui reste.
+function Envoi({ envoi, onClose }) {
+  const [envoyees, setEnvoyees] = useState([]);
+  const [copie, setCopie] = useState(false);
+  const multiple = envoi.parts.length > 1;
+
+  function envoyer(i) {
+    window.open(waLink(envoi.phone, envoi.parts[i]), '_blank');
+    setEnvoyees([...new Set([...envoyees, i])]);
+  }
+
+  return (
+    <div style={S.modalBg} onClick={onClose}>
+      <div style={{ ...S.modal, maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h2 style={{ margin: 0, fontSize: 18, color: '#0F1B3D' }}>📱 Envoi à {envoi.nom}</h2>
+          <button style={{ ...S.btnGhost, color: '#556', background: '#EEF1F6', border: 'none' }} onClick={onClose}>✕ Fermer</button>
+        </div>
+
+        {multiple && (
+          <p style={{ ...S.warn, display: 'block', marginBottom: 12 }}>
+            ⚠ Le dispatch est trop long pour un seul message WhatsApp : il part en {envoi.parts.length} fois.
+            Envoie chaque partie l'une après l'autre, sinon {envoi.nom} n'aura qu'une moitié de sa tournée.
+          </p>
+        )}
+
+        {envoi.parts.map((p, i) => (
+          <div key={i} style={{ ...S.settingRow, justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 13, color: '#556' }}>
+              {multiple ? `Partie ${i + 1} sur ${envoi.parts.length}` : 'Message complet'}
+              {' '}· {p.length} caractères
+            </span>
+            <button
+              style={envoyees.includes(i) ? { ...S.btnStatut, background: '#EAFAF1', borderColor: '#00963F' } : S.btnWa}
+              onClick={() => envoyer(i)}>
+              {envoyees.includes(i) ? '✓ envoyé — renvoyer' : '📱 Envoyer'}
+            </button>
+          </div>
+        ))}
+
+        <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid #EEF1F6', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button style={S.btnAdd} onClick={() => {
+            navigator.clipboard?.writeText(envoi.texte).then(() => setCopie(true), () => {});
+          }}>
+            {copie ? '✓ copié' : '📋 Copier le texte complet'}
+          </button>
+          <span style={{ fontSize: 11, color: '#8892A4' }}>
+            Utile si WhatsApp tronque : tu colles le message toi-même.
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
