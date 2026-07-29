@@ -245,7 +245,8 @@ export default function Dashboard() {
         <section style={{ ...S.card, borderLeft: '4px solid #B87700' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <h3 style={{ ...S.h3, color: '#B87700', margin: 0 }}>
-              ⚖ À arbitrer ({aArbitrer.length}) — déjà renseignés un jour précédent
+              ⚖ À arbitrer — {aArbitrer.reduce((s, j) => s + j.tickets.length, 0)} tickets
+              {' '}en {aArbitrer.length} intervention{aArbitrer.length > 1 ? 's' : ''}
             </h3>
             <button style={S.btnAdd} onClick={() => aArbitrer.forEach(planifierJob)}>
               Tout planifier
