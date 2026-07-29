@@ -100,11 +100,20 @@ export default function Dashboard() {
     setTechs(newTechs);
     setZones(newZones);
     setChefs(newChefs);
-    if (tickets.length) setAssign(suggestAssignments(tickets, newZones, newTechs));
     try {
       await saveSettings(db, newTechs, newZones, newChefs);
     } catch (e) {
       alert(`Réglages non enregistrés : ${e.message}`);
+      return;
+    }
+    if (db) {
+      // Les affectations des tickets sont déjà correctes en base (manuelles ou
+      // via WhatsApp) : on les recharge au lieu de les recalculer localement.
+      // Recalculer ici les remplaçait par la suggestion MSAN par défaut, ce
+      // qui faisait "disparaître" les réaffectations jusqu'au rafraîchissement.
+      await rafraichir();
+    } else if (tickets.length) {
+      setAssign(suggestAssignments(tickets, newZones, newTechs));
     }
   }
 
@@ -634,7 +643,12 @@ function Settings({ techs, zones, chefs, onSave, onClose }) {
   const [tab, setTab] = useState('techs');
   const [dTechs, setDTechs] = useState(techs.map((t) => ({ ...t })));
   const [dZones, setDZones] = useState(zones.map((z) => ({ ...z })));
-  const [dChefs, setDChefs] = useState(chefs.map((c) => ({ ...c })));
+  // _key identifie chaque chef de façon stable pendant l'édition (indépendant
+  // de son nom et de sa position), pour distinguer un renommage d'une
+  // suppression — voir handleSave.
+  const [dChefs, setDChefs] = useState(chefs.map((c, i) => ({ ...c, _key: i })));
+  const prochainKey = useRef(chefs.length);
+  const nomsInitiaux = useRef(new Map(chefs.map((c, i) => [i, c.name])));
   const [dirty, setDirty] = useState(false);
 
   const mark = (fn) => (...args) => { setDirty(true); fn(...args); };
@@ -649,9 +663,25 @@ function Settings({ techs, zones, chefs, onSave, onClose }) {
     const cleanTechs = dTechs.filter((t) => t.name.trim());
     const cleanZones = dZones.filter((z) => z.msan.trim());
     const cleanChefs = dChefs.filter((c) => c.name.trim());
-    // Equipes dont le chef a été supprimé → premier chef restant
+
+    // Un chef renommé (même _key, nom différent) doit garder ses équipes.
+    // Sans ça, renommer "Rafik" en "Karim" faisait disparaître le nom "Rafik"
+    // de chefNames ci-dessous : chaque équipe qui lui était rattachée tombait
+    // dans le cas "chef supprimé" et se retrouvait réaffectée en silence au
+    // premier chef de la liste — ce qui ressemblait à "le changement de chef
+    // ne s'enregistre pas".
+    const renommages = {};
+    for (const c of dChefs) {
+      const ancien = nomsInitiaux.current.get(c._key);
+      if (ancien && c.name.trim() && ancien !== c.name) renommages[ancien] = c.name;
+    }
+
+    // Equipes dont le chef a vraiment été supprimé → premier chef restant
     const chefNames = new Set(cleanChefs.map((c) => c.name));
-    const fixedTechs = cleanTechs.map((t) => chefNames.has(t.chef) ? t : { ...t, chef: cleanChefs[0]?.name || '' });
+    const fixedTechs = cleanTechs.map((t) => {
+      const chef = renommages[t.chef] || t.chef;
+      return chefNames.has(chef) ? { ...t, chef } : { ...t, chef: cleanChefs[0]?.name || '' };
+    });
     onSave(fixedTechs, cleanZones, cleanChefs);
   }
 
@@ -737,7 +767,7 @@ function Settings({ techs, zones, chefs, onSave, onClose }) {
                 <button style={S.btnDel} title="Supprimer" onClick={() => setC(dChefs.filter((_, j) => j !== i))}>🗑</button>
               </div>
             ))}
-            <button style={S.btnAdd} onClick={() => setC([...dChefs, { name: '', phone: '' }])}>
+            <button style={S.btnAdd} onClick={() => setC([...dChefs, { name: '', phone: '', _key: prochainKey.current++ }])}>
               + Ajouter un chef d'équipe
             </button>
           </div>
