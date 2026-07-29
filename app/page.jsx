@@ -163,7 +163,10 @@ export default function Dashboard() {
     const splitters = new Set(tickets.filter((t) => t.splitter).map((t) => t.splitter)).size;
     const faits = tickets.filter((t) => statuts[t.ref]?.statut === 'fait').length;
     const rougesEnAttente = tickets.filter((t) => t.delai >= 2 && !statuts[t.ref]).length;
-    return { total, rouge, orange, hd, splitters, faits, rougesEnAttente, reportes: Object.keys(reports).length };
+    // Ce qui attend réellement une intervention : ni clôturé, ni sorti du dispatch.
+    const reste = tickets.filter((t) => !t.hors_dispatch && !statuts[t.ref]).length;
+    return { total, rouge, orange, hd, splitters, faits, reste, rougesEnAttente,
+      reportes: Object.keys(reports).length };
   }, [tickets, reports, statuts]);
 
   function reassignJob(job, newTech) {
@@ -236,7 +239,8 @@ export default function Dashboard() {
 
         {tickets.length > 0 && (
           <div style={S.statRow}>
-            <Stat n={stats.total} l="Tickets" c="#0F1B3D" />
+            <Stat n={stats.total} l="Tickets du fichier" c="#0F1B3D" />
+            {db && <Stat n={stats.reste} l="⏳ Reste à traiter" c="#E8841A" />}
             <Stat n={stats.rouge} l="🔴 SLA dépassé (≥48h)" c="#C0392B" />
             <Stat n={stats.orange} l="🟠 24-48h" c="#B87700" />
             <Stat n={stats.hd} l="⚠ HD (hors délai IAM)" c="#C0392B" />
