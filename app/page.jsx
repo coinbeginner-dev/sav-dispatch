@@ -199,13 +199,27 @@ export default function Dashboard() {
     const rouge = tickets.filter((t) => t.delai >= 2).length;
     const orange = tickets.filter((t) => t.delai >= 1 && t.delai < 2).length;
     const hd = tickets.filter((t) => t.tranche === 'HD').length;
-    const splitters = new Set(tickets.filter((t) => t.splitter).map((t) => t.splitter)).size;
-    const faits = tickets.filter((t) => statuts[t.ref]?.statut === 'fait').length;
     const rougesEnAttente = tickets.filter((t) => t.delai >= 2 && !statuts[t.ref]).length;
-    // Ce qui attend réellement une intervention : ni clôturé, ni sorti du dispatch.
-    const reste = tickets.filter((t) => !t.hors_dispatch && !statuts[t.ref]).length;
-    return { total, rouge, orange, hd, splitters, faits, reste, rougesEnAttente,
-      reportes: Object.keys(reports).length };
+
+    // Clôturé = tout ce qui est marqué Fait. Reliquat = le reste, quel qu'il
+    // soit (en attente, planifié, bloqué, ou en arbitrage). Les 3 rubriques
+    // ci-dessous partitionnent exactement ce reliquat.
+    const cloture = tickets.filter((t) => statuts[t.ref]?.statut === 'fait').length;
+    const reliquat = total - cloture;
+    const planifie = tickets.filter((t) => statuts[t.ref]?.statut === 'planifie').length;
+    const blocage = tickets.filter((t) => statuts[t.ref]?.statut === 'blocage').length;
+    // À planifier = aucun bouton pressé aujourd'hui. Inclut aussi les tickets
+    // encore en arbitrage (visibles séparément dans la section dédiée).
+    const aPlanifier = reliquat - planifie - blocage;
+
+    // Splitters : uniquement les groupes qui ont encore au moins un ticket
+    // non clôturé — un splitter entièrement fait ne compte plus.
+    const splitters = new Set(
+      tickets.filter((t) => t.splitter && statuts[t.ref]?.statut !== 'fait').map((t) => t.splitter),
+    ).size;
+
+    return { total, cloture, reliquat, aPlanifier, planifie, blocage, splitters,
+      rouge, orange, hd, rougesEnAttente, reportes: Object.keys(reports).length };
   }, [tickets, reports, statuts]);
 
   // Recherche par n° de ticket ou nom de client : sert surtout à retrouver
@@ -375,17 +389,31 @@ export default function Dashboard() {
         </div>
 
         {tickets.length > 0 && (
-          <div style={S.statRow}>
-            <Stat n={stats.total} l="Tickets du fichier" c="#0F1B3D" />
-            {db && <Stat n={stats.reste} l="⏳ Reste à traiter" c="#E8841A" />}
-            <Stat n={stats.rouge} l="🔴 SLA dépassé (≥48h)" c="#C0392B" />
-            <Stat n={stats.orange} l="🟠 24-48h" c="#B87700" />
-            <Stat n={stats.hd} l="⚠ HD (hors délai IAM)" c="#C0392B" />
-            <Stat n={stats.splitters} l="⚡ Splitters isolés" c="#0070C0" />
-            <Stat n={stats.reportes} l="↻ Reportés (déjà vus)" c="#7A1515" />
-            {db && <Stat n={stats.faits} l="✅ Traités aujourd'hui" c="#00753A" />}
-            {db && <Stat n={stats.rougesEnAttente} l="⏳ Rouges sans nouvelle" c="#C0392B" />}
-          </div>
+          <>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
+              <StatCard n={stats.total} l="Total (fichier chargé)" bg="#F5F7FA" c="#0F1B3D" />
+              <StatCard n={stats.cloture} l="Clôturé (fait)" bg="#EAFAF1" c="#00753A" />
+              <StatCard n={stats.reliquat} l="Reliquat (total − clôturé)" bg="#FFF3E6" c="#B04E00" />
+            </div>
+
+            <div style={{ fontSize: 12, color: '#8892A4', margin: '10px 0 6px 2px' }}>
+              dont, dans le reliquat :
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <SousStat n={stats.aPlanifier} l="À planifier" c="#0F1B3D" />
+              <SousStat n={stats.planifie} l="Planifié" c="#0070C0" />
+              <SousStat n={stats.blocage} l="Blocage" c="#C0392B" />
+            </div>
+
+            <div style={S.statRow}>
+              <Stat n={stats.splitters} l="⚡ Splitters actifs (non fait)" c="#0070C0" />
+              <Stat n={stats.rouge} l="🔴 SLA dépassé (≥48h)" c="#C0392B" />
+              <Stat n={stats.orange} l="🟠 24-48h" c="#B87700" />
+              <Stat n={stats.hd} l="⚠ HD (hors délai IAM)" c="#C0392B" />
+              <Stat n={stats.reportes} l="↻ Reportés (déjà vus)" c="#7A1515" />
+              {db && <Stat n={stats.rougesEnAttente} l="⏳ Rouges sans nouvelle" c="#C0392B" />}
+            </div>
+          </>
         )}
 
         {tickets.length > 0 && (
@@ -512,6 +540,26 @@ function Stat({ n, l, c }) {
     <div style={S.stat}>
       <div style={{ fontSize: 26, fontWeight: 800, color: c }}>{n}</div>
       <div style={{ fontSize: 11, color: '#8892A4' }}>{l}</div>
+    </div>
+  );
+}
+
+// Grosse carte pour les 3 chiffres clés (Total / Clôturé / Reliquat).
+function StatCard({ n, l, bg, c }) {
+  return (
+    <div style={{ background: bg, borderRadius: 10, padding: '12px 16px', flex: '1 1 140px' }}>
+      <div style={{ fontSize: 12, color: c }}>{l}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, color: c }}>{n}</div>
+    </div>
+  );
+}
+
+// Petite carte pour les 3 rubriques du reliquat (À planifier / Planifié / Blocage).
+function SousStat({ n, l, c }) {
+  return (
+    <div style={{ border: '1px solid #E5E7EB', borderRadius: 10, padding: '8px 12px', flex: '1 1 100px' }}>
+      <div style={{ fontSize: 11, color: c }}>{l}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: c }}>{n}</div>
     </div>
   );
 }
