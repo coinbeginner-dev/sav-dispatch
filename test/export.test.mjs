@@ -63,4 +63,23 @@ assert.equal(lignes[1].cle, 'hors_dispatch');
 assert.equal(lignes[0].equipe, '', 'équipe absente du plan -> chaîne vide, pas undefined');
 ok('lignesExport traite plusieurs tickets et préserve l\'ordre');
 
+console.log('\n── Historique dans une cellule ──');
+const sansHistorique = ligneExport(T(), ctx());
+assert.equal(sansHistorique.historique, '', 'aucun retour terrain -> cellule vide, pas de crash');
+ok('historique absent du contexte -> chaîne vide');
+
+const avecHistorique = ligneExport(T(), {
+  ...ctx(),
+  historique: {
+    R100: [
+      { le: '29/07 14:44', statut: 'blocage', motif: 'Numéro injoignable', texte: null, source: 'chef' },
+      { le: '28/07 10:15', statut: 'planifie', motif: null, texte: null, source: 'orienteur' },
+    ],
+  },
+});
+assert.match(avecHistorique.historique, /29\/07 14:44 · Blocage · Numéro injoignable/);
+assert.match(avecHistorique.historique, /28\/07 10:15 · Planifié Connect/);
+assert.equal(avecHistorique.historique.split('\n').length, 2, 'une ligne par retour, la plus récente en premier');
+ok('historique complet avec dates dans une seule cellule, une ligne par retour');
+
 console.log(`\n✅ ${pass} groupes de vérifications passés — export prêt.\n`);

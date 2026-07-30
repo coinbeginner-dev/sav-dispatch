@@ -222,30 +222,49 @@ await saveSettings({
 });
 await saveUpload('2026-09-01', [
   T('R500', 'MNOC-TAOUZAR', 2.0), T('R501', 'MNOC-TAOUZAR', 1.0), T('R502', 'GA-C-COLLINE-1', 0.5),
+  T('R503', 'MNOC-TAOUZAR', 1.0),
 ]);
-await setStatut(['R500'], 'fait', { day: '2026-09-01', source: 'whatsapp' });
+await setStatut(['R500'], 'blocage', { day: '2026-09-01', motif: 'Autre', texte: 'Câble sectionné', source: 'whatsapp' });
 await setStatut(['R501'], 'pas_acces', { day: '2026-09-01', motif: 'Client absent', source: 'whatsapp' });
+await setStatut(['R503'], 'fait', { day: '2026-09-01', source: 'whatsapp' });
 
-// Le lendemain les trois reviennent dans le fichier
+// Le lendemain les quatre reviennent dans le fichier
 const arbA = await saveUpload('2026-09-02', [
   T('R500', 'MNOC-TAOUZAR', 3.0), T('R501', 'MNOC-TAOUZAR', 2.0), T('R502', 'GA-C-COLLINE-1', 1.5),
+  T('R503', 'MNOC-TAOUZAR', 2.0),
 ]);
 const arbRefs = Object.fromEntries(arbA.tickets.map((t) => [t.ref, t]));
-assert.equal(arbRefs.R500.hors_dispatch, true, 'declare fait hier -> exclu du dispatch');
+assert.equal(arbRefs.R500.hors_dispatch, true, 'declare blocage hier -> exclu du dispatch, en attente d arbitrage');
+assert.equal(arbRefs.R500.arbitrage_decide, false, 'encore en cours -> attend une decision');
 assert.equal(arbRefs.R501.hors_dispatch, true, 'motif hier -> exclu aussi');
 assert.equal(arbRefs.R502.hors_dispatch, false, 'jamais renseigne -> dispatch normal');
-assert.equal(arbRefs.R500.arbitrage, 'fait');
+assert.equal(arbRefs.R500.arbitrage, 'blocage');
+assert.equal(arbRefs.R500.arbitrage_motif, 'Autre');
+assert.equal(arbRefs.R500.arbitrage_texte, 'Câble sectionné', 'le texte libre suit aussi, pas seulement le motif');
 assert.equal(arbRefs.R501.arbitrage, 'pas_acces');
 assert.equal(arbRefs.R501.arbitrage_motif, 'Client absent', 'le motif de la veille est repris');
 assert.equal(arbRefs.R500.arbitrage_le, '2026-09-01', 'date du dernier renseignement');
 assert.equal(arbRefs.R500.assigned_tech, 'RACHID', 'equipe suggeree conservee');
-ok('tickets deja renseignes exclus du dispatch, avec statut, motif et date de la veille');
+ok('tickets encore en cours (blocage/pas acces) exclus du dispatch, avec statut, motif, texte et date de la veille');
+
+assert.equal(arbRefs.R503.hors_dispatch, true, 'declare fait hier -> cloture automatiquement');
+assert.equal(arbRefs.R503.arbitrage_decide, true, 'fait -> aucune decision a prendre, cloture directe');
+assert.equal(arbRefs.R503.statut, 'fait', 'le statut du jour reprend directement fait');
+assert.equal(arbRefs.R503.source, 'orienteur');
+ok('un ticket deja declare fait se cloture tout seul, sans passer par la liste a arbitrer');
 
 await planifier(['R500'], '2026-09-02', true);
 const arbB = await getDay('2026-09-02');
-assert.equal(arbB.tickets.find((t) => t.ref === 'R500').hors_dispatch, false, "l'orienteur l'a replanifie");
+const r500b = arbB.tickets.find((t) => t.ref === 'R500');
+assert.equal(r500b.hors_dispatch, false, "l'orienteur l'a replanifie");
+assert.equal(r500b.statut, 'blocage', 'le dernier statut connu est repris au lieu de repartir a blanc');
+assert.equal(r500b.motif, 'Autre');
+assert.equal(r500b.texte, 'Câble sectionné', 'le texte libre suit jusque dans le message au technicien');
 assert.equal(arbB.tickets.find((t) => t.ref === 'R501').hors_dispatch, true, 'les autres restent exclus');
-ok('replanification a la main par l orienteur');
+const histR500 = await getHistoriqueTickets(['R500']);
+assert.equal(histR500.R500[0].statut, 'blocage');
+assert.equal(histR500.R500[0].source, 'orienteur');
+ok('replanification a la main par l orienteur : le dernier statut/motif/texte connu est conserve et trace');
 
 // Rechargement du fichier le jour meme : l'arbitrage doit se rejouer a l'identique
 await setStatut(['R502'], 'fait', { day: '2026-09-02' });
@@ -272,9 +291,9 @@ ok('c est toujours le dernier statut connu qui est repris');
 console.log('\n── Clôture depuis l\'arbitrage ──');
 await saveUpload('2026-09-04', [T('R600', 'MNOC-TAOUZAR', 1.0), T('R601', 'MNOC-TAOUZAR', 1.0)]);
 await setStatut(['R600'], 'reporte', { day: '2026-09-04', motif: 'POC a changer' });
-await setStatut(['R601'], 'fait', { day: '2026-09-04' });
+await setStatut(['R601'], 'planifie', { day: '2026-09-04' });
 const arbJ = await saveUpload('2026-09-05', [T('R600', 'MNOC-TAOUZAR', 2.0), T('R601', 'MNOC-TAOUZAR', 2.0)]);
-assert.equal(arbJ.tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide).length, 2, 'les 2 arrivent en arbitrage');
+assert.equal(arbJ.tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide).length, 2, 'les 2 sont encore en cours -> arrivent en arbitrage');
 
 await arbitrer(['R600'], '2026-09-05', 'cloturer');
 const apresClot = await getDay('2026-09-05');
@@ -291,7 +310,9 @@ ok('cloture depuis l arbitrage : hors dispatch, acte traite, sorti de la liste')
 
 await arbitrer(['R601'], '2026-09-05', 'planifier');
 const apresPlan = await getDay('2026-09-05');
-assert.equal(apresPlan.tickets.find((t) => t.ref === 'R601').hors_dispatch, false, 'planifie : revient en dispatch');
+const r601 = apresPlan.tickets.find((t) => t.ref === 'R601');
+assert.equal(r601.hors_dispatch, false, 'planifie : revient en dispatch');
+assert.equal(r601.statut, 'planifie', 'le dernier statut connu (planifie) est repris, pas remis a blanc');
 assert.equal(apresPlan.tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide).length, 0, 'liste d arbitrage videe');
 const rechargeApres = await saveUpload('2026-09-05', [T('R600', 'MNOC-TAOUZAR', 2.0), T('R601', 'MNOC-TAOUZAR', 2.0)]);
 assert.equal(rechargeApres.tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide).length, 0,

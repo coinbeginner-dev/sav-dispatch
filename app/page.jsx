@@ -278,6 +278,7 @@ export default function Dashboard() {
       { header: 'Mis à jour le', key: 'maj', width: 16 },
       { header: 'Hors dispatch', key: 'hors', width: 12 },
       { header: 'Reporté (x jours vu)', key: 'reporte', width: 10 },
+      { header: 'Historique', key: 'historique', width: 50 },
     ];
     ws.columns = colonnes;
     ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: colonnes.length } };
@@ -299,7 +300,7 @@ export default function Dashboard() {
       rouge: 'FFC0392B', orange: 'FFB87700', vert: 'FF00753A',
     };
 
-    for (const ligne of lignesExport(tickets, { assign, statuts, reports })) {
+    for (const ligne of lignesExport(tickets, { assign, statuts, reports, historique })) {
       const { cle, ...donnees } = ligne;
       const row = ws.addRow(donnees);
       if (FOND[cle]) {
@@ -312,6 +313,9 @@ export default function Dashboard() {
         row.getCell('statut').font = { bold: true, color: { argb: TEXTE[cle] } };
       }
       row.getCell('ref').font = { bold: true };
+      const nLignes = donnees.historique ? donnees.historique.split('\n').length : 1;
+      row.getCell('historique').alignment = { wrapText: true, vertical: 'top' };
+      row.height = Math.max(row.height || 15, nLignes * 14);
     }
 
     const buffer = await wb.xlsx.writeBuffer();
@@ -468,16 +472,20 @@ export default function Dashboard() {
               <button style={S.btnAdd} onClick={() => aArbitrer.forEach((j) => arbitrerJob(j, 'planifier'))}>
                 Tout planifier
               </button>
-              <button style={S.btnAdd} onClick={() => aArbitrer.forEach((j) => arbitrerJob(j, 'cloturer'))}>
+              <button style={S.btnAdd} onClick={() => {
+                const n = aArbitrer.reduce((s, j) => s + j.tickets.length, 0);
+                if (!confirm(`Clôturer les ${n} tickets affichés d'un coup ? Certains sont peut-être encore en blocage ou en cours — vérifie la liste avant de confirmer.`)) return;
+                aArbitrer.forEach((j) => arbitrerJob(j, 'cloturer'));
+              }}>
                 Tout clôturer
               </button>
             </div>
           </div>
           <p style={S.hint}>
-            Ces tickets sont revenus dans le fichier alors qu'ils avaient déjà un statut.
-            Ils sont <strong>exclus du dispatch</strong> et n'apparaissent pas dans les messages WhatsApp
-            envoyés aux équipes. Un ticket déjà fait qui réapparaît attend en général une clôture
-            côté IAM, pas une nouvelle intervention.
+            Ces tickets sont revenus dans le fichier alors qu'ils sont encore <strong>en cours</strong>
+            (planifié ou en blocage) — un ticket déjà déclaré fait se clôture tout seul et n'apparaît
+            plus ici. Ils sont <strong>exclus du dispatch</strong> et n'apparaissent pas dans les
+            messages WhatsApp tant que tu n'as pas décidé de les replanifier ou de les clôturer.
           </p>
           {aArbitrer.filter((j) => !rechercheNorm || matchJob(j)).map((job) => (
             <ArbitrageRow key={job.key} job={job} techs={activeTechs}
@@ -814,7 +822,6 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, notes, onS
 // puis décide de le remettre ou non dans la distribution du jour.
 function ArbitrageRow({ job, techs, current, onChange, onArbitrer }) {
   const t = job.tickets[0];
-  const LIB = { fait: '✅ déclaré fait', pas_acces: "🚪 pas d'accès", reporte: '⏭ reporté' };
   const jour = t.arbitrage_le ? t.arbitrage_le.split('-').reverse().join('/') : '';
   return (
     <div style={{ ...S.job, background: '#FFF8EC', borderLeft: '4px solid #B87700' }}>
@@ -825,8 +832,9 @@ function ArbitrageRow({ job, techs, current, onChange, onArbitrer }) {
             {t.days_seen > 1 && <span style={S.repBadge}>↻ {t.days_seen}e jour</span>}
           </div>
           <div style={{ fontSize: 12, color: '#B87700', fontWeight: 600 }}>
-            {LIB[t.arbitrage] || t.arbitrage} le {jour}
+            {STATUT_LABEL[t.arbitrage] || t.arbitrage} le {jour}
             {t.arbitrage_motif ? ` · ${t.arbitrage_motif}` : ''}
+            {t.arbitrage_texte ? ` « ${t.arbitrage_texte} »` : ''}
           </div>
           <div style={{ fontSize: 12, color: '#556' }}>{t.client} · {t.msan}</div>
         </div>
