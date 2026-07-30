@@ -36,6 +36,9 @@ export default function Dashboard() {
   const [fileName, setFileName] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  // Nom du technicien en cours de composition d'un envoi WhatsApp (sélection
+  // des interventions à inclure avant d'ouvrir WhatsApp), ou null si fermé.
+  const [waCompose, setWaCompose] = useState(null);
   const [reports, setReports] = useState({});
   const [statuts, setStatuts] = useState({});
   const [historique, setHistorique] = useState({});
@@ -286,6 +289,8 @@ export default function Dashboard() {
       { header: 'Mis à jour le', key: 'maj', width: 16 },
       { header: 'Hors dispatch', key: 'hors', width: 12 },
       { header: 'Reporté (x jours vu)', key: 'reporte', width: 10 },
+      { header: 'Splitter', key: 'splitter', width: 20 },
+      { header: 'Tickets liés (même splitter)', key: 'ticketsLies', width: 12 },
       { header: 'Historique', key: 'historique', width: 50 },
     ];
     ws.columns = colonnes;
@@ -352,13 +357,22 @@ export default function Dashboard() {
     return (perTech.map[techName] || []).filter((j) => !['fait', 'clos'].includes(statuts[j.tickets[0].ref]?.statut));
   }
 
-  function sendTech(techName) {
+  // Ouvre la sélection avant envoi plutôt que d'envoyer tout de suite :
+  // l'orienteur peut décocher certaines interventions (ex : à garder pour
+  // demain) au lieu de tout envoyer d'un bloc.
+  function ouvrirEnvoiTech(techName) {
     const tech = techs.find((t) => t.name === techName);
     if (!tech?.phone) { alert(`Pas de numéro WhatsApp pour ${techName}. Ajoute-le dans Réglages.`); return; }
     const jobs = jobsRestants(techName);
     if (!jobs.length) { alert(`Aucun ticket restant pour ${techName}.`); return; }
-    const msg = buildTechMessage(techName, jobs, dateStr);
+    setWaCompose(techName);
+  }
+
+  function envoyerTech(techName, jobsChoisis) {
+    const tech = techs.find((t) => t.name === techName);
+    const msg = buildTechMessage(techName, jobsChoisis, dateStr);
     window.open(waLink(tech.phone, msg), '_blank');
+    setWaCompose(null);
   }
 
   function sendChef(chef) {
@@ -521,7 +535,7 @@ export default function Dashboard() {
               return (
                 <TechColumn key={tech.name} tech={tech} jobs={jobs} statuts={statuts} historique={historique}
                   reports={reports} techs={activeTechs} db={db} maxLoad={maxLoad} filtre={rechercheNorm}
-                  onChange={reassignJob} onStatut={marquerStatut} onSend={() => sendTech(tech.name)} />
+                  onChange={reassignJob} onStatut={marquerStatut} onSend={() => ouvrirEnvoiTech(tech.name)} />
               );
             })}
           </section>
@@ -557,6 +571,15 @@ export default function Dashboard() {
       )}
 
       {showHistory && <History onClose={() => setShowHistory(false)} />}
+
+      {waCompose && (
+        <WhatsAppComposeModal
+          techName={waCompose}
+          jobs={jobsRestants(waCompose)}
+          onClose={() => setWaCompose(null)}
+          onEnvoyer={(jobsChoisis) => envoyerTech(waCompose, jobsChoisis)}
+        />
+      )}
     </div>
   );
 }
@@ -842,6 +865,69 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, notes, onS
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// Sélection des interventions à inclure avant d'ouvrir WhatsApp — tout est
+// coché par défaut (équivalent à l'ancien envoi immédiat), mais l'orienteur
+// peut décocher certaines interventions à garder pour plus tard.
+function WhatsAppComposeModal({ techName, jobs, onClose, onEnvoyer }) {
+  const [coches, setCoches] = useState(() => new Set(jobs.map((j) => j.key)));
+
+  function toggle(key) {
+    setCoches((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+
+  const total = jobs.reduce((s, j) => s + j.tickets.length, 0);
+  const selectionnes = jobs.filter((j) => coches.has(j.key));
+  const nSelectionnes = selectionnes.reduce((s, j) => s + j.tickets.length, 0);
+
+  return (
+    <div style={S.modalBg} onClick={onClose}>
+      <div style={{ ...S.modal, maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={S.h3}>📱 Envoyer à {techName}</h3>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+          <button style={S.btnGhost} onClick={() => setCoches(new Set(jobs.map((j) => j.key)))}>Tout cocher</button>
+          <button style={S.btnGhost} onClick={() => setCoches(new Set())}>Tout décocher</button>
+          <span style={{ fontSize: 12, color: '#8892A4', marginLeft: 'auto', alignSelf: 'center' }}>
+            {nSelectionnes}/{total} tickets sélectionnés
+          </span>
+        </div>
+        <div style={{ maxHeight: '55vh', overflowY: 'auto' }}>
+          {jobs.map((job) => (
+            <label key={job.key} style={{
+              display: 'flex', gap: 10, alignItems: 'flex-start', padding: '8px 4px',
+              borderBottom: '1px solid #EEF0F4', cursor: 'pointer',
+            }}>
+              <input type="checkbox" checked={coches.has(job.key)} onChange={() => toggle(job.key)}
+                style={{ marginTop: 3 }} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: '#0F1B3D' }}>
+                  {job.type === 'splitter'
+                    ? `⚡ SPLITTER ${job.key} (${job.tickets.length} clients)`
+                    : job.tickets[0].ref}
+                </div>
+                <div style={{ fontSize: 12, color: '#556' }}>
+                  {job.type === 'splitter'
+                    ? job.tickets.map((t) => t.client).join(' · ')
+                    : job.tickets[0].client}
+                </div>
+              </div>
+            </label>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+          <button style={S.btnPrimary} onClick={() => onEnvoyer(selectionnes)} disabled={!selectionnes.length}>
+            📱 Envoyer ({nSelectionnes})
+          </button>
+          <button style={S.btnGhost} onClick={onClose}>Annuler</button>
+        </div>
+      </div>
     </div>
   );
 }

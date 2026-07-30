@@ -91,4 +91,23 @@ assert.match(avecHistorique.historique, /28\/07 10:15 · Planifié Connect/);
 assert.equal(avecHistorique.historique.split('\n').length, 2, 'une ligne par retour, la plus récente en premier');
 ok('historique complet avec dates dans une seule cellule, une ligne par retour');
 
+console.log('\n── Splitter : tickets résolus par une seule action ──');
+const seul = ligneExport(T({ ref: 'R1', splitter: 'TAOUZAR:1-1-9-9' }), ctx());
+assert.equal(seul.splitter, 'TAOUZAR:1-1-9-9');
+assert.equal(seul.ticketsLies, '', 'appelé isolément, ligneExport ne connaît pas le groupe -> vide par défaut');
+
+const lignesSplitter = lignesExport(
+  [
+    T({ ref: 'R1', splitter: 'TAOUZAR:1-1-9-9' }),
+    T({ ref: 'R2', splitter: 'TAOUZAR:1-1-9-9' }),
+    T({ ref: 'R3', splitter: null }),
+  ],
+  { assign: {}, statuts: {}, reports: {} },
+);
+assert.equal(lignesSplitter[0].ticketsLies, 2, 'lignesExport calcule la taille du groupe pour chaque ticket lié');
+assert.equal(lignesSplitter[1].ticketsLies, 2);
+assert.equal(lignesSplitter[2].splitter, '', 'ticket sans splitter -> colonne vide');
+assert.equal(lignesSplitter[2].ticketsLies, '', 'seul dans son groupe -> pas de compte affiché');
+ok('la colonne Splitter + Tickets liés identifie les tickets résolus par une seule intervention');
+
 console.log(`\n✅ ${pass} groupes de vérifications passés — export prêt.\n`);

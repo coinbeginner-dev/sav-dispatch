@@ -6,7 +6,7 @@ import {
   useSqlClient, getSettings, saveSettings, saveUpload, getDay, assignTickets, getHistory,
   setStatut, getAvancement, getEcarts, planifier, arbitrer, getHistoriqueTickets,
 } from '../lib/db.js';
-import { DEFAULT_TECHS, DEFAULT_ZONES, DEFAULT_CHEFS } from '../lib/dispatch.js';
+import { DEFAULT_TECHS, DEFAULT_ZONES, DEFAULT_CHEFS, buildJobs } from '../lib/dispatch.js';
 
 // ── Shim : reproduit l'API tagged-template du driver Neon sur PGlite ──
 function makeSql(pg) {
@@ -360,6 +360,36 @@ const j700bis = await getDay('2026-10-01');
 assert.equal(Object.keys(j700bis.historique).length, 1, 'getDay expose l historique du ticket concerne');
 assert.equal(j700bis.historique.R700.length, 4);
 ok('l historique est aussi expose directement par getDay');
+
+console.log('\n── Regroupement splitter ──');
+await saveUpload('2026-11-01', [
+  T('R900', 'MNOC-TAOUZAR', 1.0), T('R901', 'GA-C-COLLINE-1', 1.0),
+]);
+const jSplit1 = await getDay('2026-11-01');
+assert.equal(jSplit1.tickets.find((t) => t.ref === 'R900').assigned_tech, 'RACHID');
+assert.equal(jSplit1.tickets.find((t) => t.ref === 'R901').assigned_tech, 'RAFIK');
+ok('avant liaison splitter : chaque ticket suit sa propre equipe MSAN');
+
+// Reaffectation manuelle de R900 avant que le splitter n apparaisse
+await assignTickets(['R900'], 'HAMID', '2026-11-01');
+
+// Le lendemain, le fichier lie les deux tickets au meme splitter
+const jSplit2 = await saveUpload('2026-11-02', [
+  T('R900', 'MNOC-TAOUZAR', 2.0, { splitter: 'TAOUZAR:1-1-9-9' }),
+  T('R901', 'GA-C-COLLINE-1', 2.0, { splitter: 'TAOUZAR:1-1-9-9' }),
+]);
+const r900b = jSplit2.tickets.find((t) => t.ref === 'R900');
+const r901b = jSplit2.tickets.find((t) => t.ref === 'R901');
+assert.equal(r900b.assigned_tech, r901b.assigned_tech, 'les deux tickets du meme splitter partagent desormais la meme equipe');
+assert.equal(r900b.assigned_tech, 'HAMID', 'l affectation manuelle du groupe (posee avant la liaison) prime sur la suggestion MSAN');
+assert.equal(r901b.assign_manual, true, 'le caractere manuel se propage a tout le groupe pour rester sticky');
+ok('deux tickets relies au meme splitter sont realignes sur la meme equipe (priorite a l affectation manuelle)');
+
+const parEquipeHamid = jSplit2.tickets.filter((t) => t.assigned_tech === 'HAMID');
+const jobSplitter = buildJobs(parEquipeHamid).find((j) => j.type === 'splitter');
+assert.ok(jobSplitter, 'les deux tickets sont bien fusionnes en un seul job splitter cote client');
+assert.equal(jobSplitter.tickets.length, 2);
+ok('cote client, buildJobs fusionne desormais les deux tickets du splitter dans la meme colonne technicien');
 
 await pg.close();
 console.log(`\n✅ ${pass} groupes de vérifications passés — la couche base est saine.\n`);
