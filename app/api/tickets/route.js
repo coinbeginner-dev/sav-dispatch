@@ -57,7 +57,7 @@ export async function PATCH(req) {
     const body = await req.json();
     const day = body.day || today();
     if ('arbitrage' in body) {
-      return NextResponse.json(await arbitrer(body.refs, day, body.arbitrage));
+      return NextResponse.json(await arbitrer(body.refs, day, body.arbitrage, body.motif || null));
     }
     if ('statut' in body) {
       const r = await setStatut(body.refs, body.statut, {

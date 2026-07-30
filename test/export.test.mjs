@@ -52,6 +52,15 @@ assert.equal(blocageAutre.precision, 'Câble arraché par un tiers');
 assert.equal(blocageAutre.source, 'whatsapp');
 ok('blocage "Autre" : motif et texte libre conservés dans des colonnes séparées');
 
+const clos = ligneExport(T(), ctx({
+  R100: { statut: 'clos', motif: 'Doublon avec R099', texte: null, source: 'orienteur' },
+}));
+assert.equal(clos.statut, 'Clos', 'distinct de "Fait" dans l\'export aussi');
+assert.equal(clos.motif, 'Doublon avec R099');
+assert.equal(clos.cle, 'clos');
+assert.notEqual(statutCouleur(T(), { statut: 'clos' }), 'fait', 'clos ne doit jamais se confondre avec fait dans la couleur');
+ok('statut Clos avec motif : distinct de Fait, couleur propre');
+
 console.log('\n── Plusieurs tickets ──');
 const lignes = lignesExport(
   [T({ ref: 'R1', delai: 3 }), T({ ref: 'R2', hors_dispatch: true })],

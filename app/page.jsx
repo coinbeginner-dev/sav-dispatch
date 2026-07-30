@@ -16,6 +16,9 @@ const STATUT_LABEL = {
   fait: '✅ Fait',
   planifie: '📅 Planifié Connect',
   blocage: '⛔ Blocage',
+  // Clos administrativement, avec motif (doublon, hors périmètre, annulé...) —
+  // distinct d'un "Fait" réellement constaté sur le terrain.
+  clos: '🚫 Clos',
   // anciennes valeurs encore présentes dans l'historique
   pas_acces: '🚪 Pas d\'accès',
   reporte: '⏭ Reporté',
@@ -167,19 +170,20 @@ export default function Dashboard() {
     }
   }
 
-  // Arbitrage : soit le ticket repart chez son équipe, soit on acte qu'il est
-  // traité et il quitte la liste au lieu d'y revenir chaque matin.
-  function arbitrerJob(job, decision) {
+  // Arbitrage : soit le ticket repart chez son équipe, soit l'orienteur le
+  // clôture avec un motif (distinct d'un "fait" réellement constaté) et il
+  // quitte la liste au lieu d'y revenir chaque matin.
+  function arbitrerJob(job, decision, motif) {
     const refs = job.tickets.map((t) => t.ref);
     setTickets(tickets.map((t) => (refs.includes(t.ref)
       ? { ...t, hors_dispatch: decision === 'cloturer', arbitrage_decide: true }
       : t)));
     if (decision === 'cloturer') {
       const next = { ...statuts };
-      for (const r of refs) next[r] = { statut: 'fait', motif: job.tickets[0].arbitrage_motif, source: 'orienteur' };
+      for (const r of refs) next[r] = { statut: 'clos', motif: motif || job.tickets[0].arbitrage_motif, source: 'orienteur' };
       setStatuts(next);
     }
-    pushArbitrage(db, refs, decision, jourActif).catch((e) => alert(`Arbitrage non enregistré : ${e.message}. Rafraîchis la page.`));
+    pushArbitrage(db, refs, decision, jourActif, motif).catch((e) => alert(`Arbitrage non enregistré : ${e.message}. Rafraîchis la page.`));
   }
 
   // ── Distribution ──────────────────────────────────────────
@@ -213,10 +217,14 @@ export default function Dashboard() {
     const hd = tickets.filter((t) => t.tranche === 'HD').length;
     const rougesEnAttente = tickets.filter((t) => t.delai >= 2 && !statuts[t.ref]).length;
 
-    // Clôturé = tout ce qui est marqué Fait. Reliquat = le reste, quel qu'il
-    // soit (en attente, planifié, bloqué, ou en arbitrage). Les 3 rubriques
-    // ci-dessous partitionnent exactement ce reliquat.
-    const cloture = tickets.filter((t) => statuts[t.ref]?.statut === 'fait').length;
+    // Clôturé = marqué Fait, ou Clos (clôturé avec motif par l'orienteur —
+    // même effet pour le dispatch, mais compté à part pour ne pas confondre
+    // avec une intervention réellement terminée sur le terrain).
+    // Reliquat = le reste, quel qu'il soit (en attente, planifié, bloqué, ou
+    // en arbitrage). Les 3 rubriques ci-dessous partitionnent ce reliquat.
+    const fait = tickets.filter((t) => statuts[t.ref]?.statut === 'fait').length;
+    const clos = tickets.filter((t) => statuts[t.ref]?.statut === 'clos').length;
+    const cloture = fait + clos;
     const reliquat = total - cloture;
     const planifie = tickets.filter((t) => statuts[t.ref]?.statut === 'planifie').length;
     const blocage = tickets.filter((t) => statuts[t.ref]?.statut === 'blocage').length;
@@ -225,12 +233,12 @@ export default function Dashboard() {
     const aPlanifier = reliquat - planifie - blocage;
 
     // Splitters : uniquement les groupes qui ont encore au moins un ticket
-    // non clôturé — un splitter entièrement fait ne compte plus.
+    // non clôturé — un splitter entièrement fait/clos ne compte plus.
     const splitters = new Set(
-      tickets.filter((t) => t.splitter && statuts[t.ref]?.statut !== 'fait').map((t) => t.splitter),
+      tickets.filter((t) => !['fait', 'clos'].includes(statuts[t.ref]?.statut)).filter((t) => t.splitter).map((t) => t.splitter),
     ).size;
 
-    return { total, cloture, reliquat, aPlanifier, planifie, blocage, splitters,
+    return { total, cloture, clos, reliquat, aPlanifier, planifie, blocage, splitters,
       rouge, orange, hd, rougesEnAttente, reportes: Object.keys(reports).length };
   }, [tickets, reports, statuts]);
 
@@ -292,11 +300,11 @@ export default function Dashboard() {
     // Mêmes couleurs que les cartes à l'écran, pour reconnaître le dispatch
     // au premier coup d'œil dans Excel.
     const FOND = {
-      fait: 'FFEAFAF1', planifie: 'FFEAF3FA', blocage: 'FFFEF2F2',
+      fait: 'FFEAFAF1', planifie: 'FFEAF3FA', blocage: 'FFFEF2F2', clos: 'FFF5F7FA',
       hors_dispatch: 'FFF5F7FA', rouge: 'FFFEF2F2', orange: 'FFFFF8EC', vert: 'FFEAFAF1',
     };
     const TEXTE = {
-      fait: 'FF00753A', planifie: 'FF0070C0', blocage: 'FFC0392B',
+      fait: 'FF00753A', planifie: 'FF0070C0', blocage: 'FFC0392B', clos: 'FF556677',
       rouge: 'FFC0392B', orange: 'FFB87700', vert: 'FF00753A',
     };
 
@@ -337,11 +345,11 @@ export default function Dashboard() {
   }
 
   // ── WhatsApp ──────────────────────────────────────────────
-  // Un ticket marqué "Fait" n'a plus rien à faire sur le terrain : on ne le
-  // renvoie pas dans les messages, sinon l'équipe reçoit des interventions
-  // déjà closes et le dispatch perd toute lisibilité.
+  // Un ticket marqué "Fait" ou "Clos" n'a plus rien à faire sur le terrain :
+  // on ne le renvoie pas dans les messages, sinon l'équipe reçoit des
+  // interventions déjà closes et le dispatch perd toute lisibilité.
   function jobsRestants(techName) {
-    return (perTech.map[techName] || []).filter((j) => statuts[j.tickets[0].ref]?.statut !== 'fait');
+    return (perTech.map[techName] || []).filter((j) => !['fait', 'clos'].includes(statuts[j.tickets[0].ref]?.statut));
   }
 
   function sendTech(techName) {
@@ -413,7 +421,7 @@ export default function Dashboard() {
           <>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
               <StatCard n={stats.total} l="Total (fichier chargé)" bg="#F5F7FA" c="#0F1B3D" />
-              <StatCard n={stats.cloture} l="Clôturé (fait)" bg="#EAFAF1" c="#00753A" />
+              <StatCard n={stats.cloture} l={`Clôturé (fait)${stats.clos ? ` · dont ${stats.clos} clos` : ''}`} bg="#EAFAF1" c="#00753A" />
               <StatCard n={stats.reliquat} l="Reliquat (total − clôturé)" bg="#FFF3E6" c="#B04E00" />
             </div>
 
@@ -472,26 +480,20 @@ export default function Dashboard() {
               <button style={S.btnAdd} onClick={() => aArbitrer.forEach((j) => arbitrerJob(j, 'planifier'))}>
                 Tout planifier
               </button>
-              <button style={S.btnAdd} onClick={() => {
-                const n = aArbitrer.reduce((s, j) => s + j.tickets.length, 0);
-                if (!confirm(`Clôturer les ${n} tickets affichés d'un coup ? Certains sont peut-être encore en blocage ou en cours — vérifie la liste avant de confirmer.`)) return;
-                aArbitrer.forEach((j) => arbitrerJob(j, 'cloturer'));
-              }}>
-                Tout clôturer
-              </button>
             </div>
           </div>
           <p style={S.hint}>
             Ces tickets sont revenus dans le fichier alors qu'ils sont encore <strong>en cours</strong>
-            (planifié ou en blocage) — un ticket déjà déclaré fait se clôture tout seul et n'apparaît
-            plus ici. Ils sont <strong>exclus du dispatch</strong> et n'apparaissent pas dans les
-            messages WhatsApp tant que tu n'as pas décidé de les replanifier ou de les clôturer.
+            (planifié ou en blocage) — un ticket déjà déclaré fait ou clos se reconduit tout seul et
+            n'apparaît plus ici. Ils sont <strong>exclus du dispatch</strong> et n'apparaissent pas
+            dans les messages WhatsApp tant que tu n'as pas décidé de les replanifier ou de les
+            clôturer (ticket par ticket, avec un motif).
           </p>
           {aArbitrer.filter((j) => !rechercheNorm || matchJob(j)).map((job) => (
             <ArbitrageRow key={job.key} job={job} techs={activeTechs}
               current={assign[job.tickets[0].ref] || ''}
               onChange={(v) => reassignJob(job, v)}
-              onArbitrer={(d) => arbitrerJob(job, d)} />
+              onArbitrer={(d, m) => arbitrerJob(job, d, m)} />
           ))}
         </section>
       )}
@@ -599,7 +601,7 @@ function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLo
   const todo = [];
   const done = [];
   for (const job of jobs) {
-    if (statuts[job.tickets[0].ref]?.statut === 'fait') done.push(job);
+    if (['fait', 'clos'].includes(statuts[job.tickets[0].ref]?.statut)) done.push(job);
     else todo.push(job);
   }
 
@@ -612,11 +614,13 @@ function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLo
 
   // Même répartition que le bandeau global (Total / Fait / Planifié /
   // À planifier / Blocage), comptée en tickets pour rester cohérente avec lui.
+  // Clos (clôturé avec motif par l'orienteur) compte avec Fait, affiché à part.
   const tousLesTickets = jobs.flatMap((j) => j.tickets);
   const nFait = tousLesTickets.filter((t) => statuts[t.ref]?.statut === 'fait').length;
+  const nClos = tousLesTickets.filter((t) => statuts[t.ref]?.statut === 'clos').length;
   const nPlanifie = tousLesTickets.filter((t) => statuts[t.ref]?.statut === 'planifie').length;
   const nBlocage = tousLesTickets.filter((t) => statuts[t.ref]?.statut === 'blocage').length;
-  const nAPlanifier = nt - nFait - nPlanifie - nBlocage;
+  const nAPlanifier = nt - nFait - nClos - nPlanifie - nBlocage;
 
   // Recherche : ne garde que les interventions correspondantes. Si l'équipe
   // n'a aucun résultat, sa colonne entière disparaît — c'est ainsi que
@@ -645,7 +649,7 @@ function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLo
       {nt > 0 && (
         <div style={{ fontSize: 11, color: '#556', marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
           <span>Total <strong>{nt}</strong></span>
-          <span style={{ color: '#00753A' }}>Fait <strong>{nFait}</strong></span>
+          <span style={{ color: '#00753A' }}>Fait <strong>{nFait + nClos}</strong>{nClos > 0 ? ` (dont ${nClos} clos)` : ''}</span>
           <span style={{ color: '#0070C0' }}>Planifié <strong>{nPlanifie}</strong></span>
           <span style={{ color: '#0F1B3D' }}>À planifier <strong>{nAPlanifier}</strong></span>
           <span style={{ color: '#C0392B' }}>Blocage <strong>{nBlocage}</strong></span>
@@ -713,6 +717,14 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, notes, onS
     setTexteAutre('');
   }
 
+  function validerClos() {
+    const t = texteAutre.trim();
+    if (!t) return;
+    onStatut('clos', t);
+    setMotifPour(null);
+    setTexteAutre('');
+  }
+
   return (
     <div style={{
       ...S.job,
@@ -762,6 +774,7 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, notes, onS
           <button style={S.btnStatut} onClick={() => onStatut('fait')}>✅ Fait</button>
           <button style={S.btnStatut} onClick={() => onStatut('planifie')}>📅 Planifié Connect</button>
           <button style={S.btnStatut} onClick={() => setMotifPour('blocage')}>⛔ Blocage</button>
+          <button style={S.btnStatut} onClick={() => setMotifPour('clos')}>🚫 Clos</button>
         </div>
       )}
 
@@ -789,6 +802,22 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, notes, onS
           <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
             <button style={S.btnSave} onClick={validerAutre} disabled={!texteAutre.trim()}>Enregistrer</button>
             <button style={S.btnLink} onClick={() => { setMotifPour('blocage'); setTexteAutre(''); }}>retour</button>
+          </div>
+        </div>
+      )}
+
+      {db && !statut && motifPour === 'clos' && (
+        <div style={{ ...S.statutBar, flexDirection: 'column', alignItems: 'stretch' }}>
+          <textarea
+            style={{ ...S.inputSm, width: '100%', minHeight: 50, resize: 'vertical' }}
+            placeholder="Motif de la clôture (ex : doublon, client a annulé, hors périmètre...)"
+            value={texteAutre}
+            onChange={(e) => setTexteAutre(e.target.value)}
+            autoFocus
+          />
+          <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+            <button style={S.btnSave} onClick={validerClos} disabled={!texteAutre.trim()}>Enregistrer</button>
+            <button style={S.btnLink} onClick={() => { setMotifPour(null); setTexteAutre(''); }}>retour</button>
           </div>
         </div>
       )}
@@ -844,8 +873,12 @@ function ArbitrageRow({ job, techs, current, onChange, onArbitrer }) {
             {techs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}
           </select>
           <button style={S.btnSave} onClick={() => onArbitrer('planifier')}>Planifier</button>
-          <button style={S.btnStatut} title="Ne sera pas planifié : acté comme traité"
-            onClick={() => onArbitrer('cloturer')}>Clôturer</button>
+          <button style={S.btnStatut} title="Clos avec motif : ne sera pas planifié, sort de l'arbitrage"
+            onClick={() => {
+              const motif = window.prompt('Motif de clôture (obligatoire) :', '');
+              if (!motif || !motif.trim()) return;
+              onArbitrer('cloturer', motif.trim());
+            }}>🚫 Clos</button>
         </div>
       </div>
     </div>

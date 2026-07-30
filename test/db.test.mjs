@@ -295,18 +295,18 @@ await setStatut(['R601'], 'planifie', { day: '2026-09-04' });
 const arbJ = await saveUpload('2026-09-05', [T('R600', 'MNOC-TAOUZAR', 2.0), T('R601', 'MNOC-TAOUZAR', 2.0)]);
 assert.equal(arbJ.tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide).length, 2, 'les 2 sont encore en cours -> arrivent en arbitrage');
 
-await arbitrer(['R600'], '2026-09-05', 'cloturer');
+await arbitrer(['R600'], '2026-09-05', 'cloturer', 'Doublon avec R599');
 const apresClot = await getDay('2026-09-05');
 const r600 = apresClot.tickets.find((t) => t.ref === 'R600');
 assert.equal(r600.hors_dispatch, true, 'cloture : reste hors du dispatch');
 assert.equal(r600.arbitrage_decide, true, "cloture : sort de la liste d'arbitrage");
-assert.equal(apresClot.statuts.R600.statut, 'fait', 'cloture : acte comme traite');
+assert.equal(apresClot.statuts.R600.statut, 'clos', 'cloture depuis l arbitrage -> clos, pas fait (distinct d une intervention reellement terminee)');
 assert.equal(apresClot.statuts.R600.source, 'orienteur', 'la decision est tracee comme venant de l orienteur');
-assert.equal(apresClot.statuts.R600.motif, 'POC a changer', 'le motif d origine est conserve');
+assert.equal(apresClot.statuts.R600.motif, 'Doublon avec R599', 'le motif fourni par l orienteur prime');
 const restants = apresClot.tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide);
 assert.equal(restants.length, 1, 'seul R601 reste a arbitrer');
 assert.equal(restants[0].ref, 'R601');
-ok('cloture depuis l arbitrage : hors dispatch, acte traite, sorti de la liste');
+ok('cloture depuis l arbitrage : hors dispatch, acte clos avec motif, sorti de la liste');
 
 await arbitrer(['R601'], '2026-09-05', 'planifier');
 const apresPlan = await getDay('2026-09-05');
@@ -318,6 +318,16 @@ const rechargeApres = await saveUpload('2026-09-05', [T('R600', 'MNOC-TAOUZAR', 
 assert.equal(rechargeApres.tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide).length, 0,
   'un rechargement ne fait pas revenir ce qui a ete arbitre');
 ok('les deux decisions vident la liste et survivent au rechargement');
+
+// R600 (clos avec motif) reapparait un jour suivant : il doit se reconduire
+// tout seul, exactement comme un "fait", sans repasser par l arbitrage.
+const lendemainClos = await saveUpload('2026-09-06', [T('R600', 'MNOC-TAOUZAR', 3.0)]);
+const r600Lendemain = lendemainClos.tickets.find((t) => t.ref === 'R600');
+assert.equal(r600Lendemain.hors_dispatch, true, 'clos hier -> exclu automatiquement');
+assert.equal(r600Lendemain.arbitrage_decide, true, 'clos -> aucune decision a reprendre, reconduit tout seul');
+assert.equal(r600Lendemain.statut, 'clos', 'le statut clos est repris tel quel, pas transforme en fait');
+assert.equal(r600Lendemain.motif, 'Doublon avec R599', 'le motif de cloture suit');
+ok('un ticket clos avec motif se reconduit tout seul, comme un fait, sans repasser par l arbitrage');
 
 console.log('\n── Nouveau vocabulaire (fait / planifie / blocage) + historique ──');
 await saveUpload('2026-10-01', [T('R700', 'MNOC-TAOUZAR', 1.5)]);
