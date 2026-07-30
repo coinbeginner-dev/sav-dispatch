@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   hasDb, getDay, saveUpload, assignTickets, setStatut, getAvancement, arbitrer,
+  getDernierJourAvecTickets,
 } from '../../../lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -9,12 +10,27 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// Tickets du jour (rechargement de page / autre appareil)
+// Tickets du jour (rechargement de page / autre appareil). Si le jour demandé
+// n'a encore aucun ticket (aucun fichier chargé aujourd'hui), on retombe sur
+// le dernier jour connu plutôt que de renvoyer un écran vide : l'orienteur
+// voit ce qui restait en cours, avec les affectations déjà faites, et peut
+// commencer à travailler dessus avant même que le fichier du matin arrive.
 export async function GET(req) {
   if (!hasDb()) return NextResponse.json({ db: false });
   try {
-    const day = new URL(req.url).searchParams.get('day') || today();
-    return NextResponse.json({ db: true, ...(await getDay(day)) });
+    const demande = new URL(req.url).searchParams.get('day') || today();
+    let jour = demande;
+    let resultat = await getDay(jour);
+    let reporte = false;
+    if (resultat.tickets.length === 0) {
+      const dernier = await getDernierJourAvecTickets();
+      if (dernier && dernier !== jour) {
+        jour = dernier;
+        resultat = await getDay(jour);
+        reporte = true;
+      }
+    }
+    return NextResponse.json({ db: true, ...resultat, jourDemande: demande, jourAffiche: jour, reporte });
   } catch (e) {
     return NextResponse.json({ db: false, error: String(e.message || e) }, { status: 500 });
   }

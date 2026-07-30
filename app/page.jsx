@@ -40,6 +40,10 @@ export default function Dashboard() {
   const [db, setDb] = useState(false);
   const [busy, setBusy] = useState(false);
   const [recherche, setRecherche] = useState('');
+  // Jour réellement affiché/actionné : aujourd'hui, ou le dernier jour connu
+  // si aucun fichier n'a encore été chargé aujourd'hui (voir loadInitial).
+  const [jourActif, setJourActif] = useState(today());
+  const [reporte, setReporte] = useState(false);
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -48,6 +52,8 @@ export default function Dashboard() {
       setTechs(s.techs);
       setZones(s.zones);
       setChefs(s.chefs);
+      setJourActif(s.jourAffiche || today());
+      setReporte(Boolean(s.reporte));
       if (s.tickets.length) {
         setTickets(s.tickets);
         setAssign(s.assign);
@@ -68,6 +74,8 @@ export default function Dashboard() {
       setDb(s.db); setTechs(s.techs); setZones(s.zones); setChefs(s.chefs);
       setTickets(s.tickets); setAssign(s.assign);
       setReports(s.reports); setStatuts(s.statuts || {}); setHistorique(s.historique || {});
+      setJourActif(s.jourAffiche || today());
+      setReporte(Boolean(s.reporte));
       if (s.tickets.length) setFileName('dispatch du jour (base)');
     } finally { setBusy(false); }
   }
@@ -95,7 +103,7 @@ export default function Dashboard() {
     }
     setStatuts(next);
     setHistorique(hist);
-    pushStatut(db, refs, statut, motif, texte).finally(() => setEnAttente(statutsEnAttente()));
+    pushStatut(db, refs, statut, motif, texte, jourActif).finally(() => setEnAttente(statutsEnAttente()));
   }
 
   async function persistSettings(newTechs, newZones, newChefs) {
@@ -142,6 +150,10 @@ export default function Dashboard() {
       setTickets(res.tickets);
       setAssign(res.assign);
       setReports(res.reports);
+      // Le fichier du jour vient d'être déposé : la vue "reportée" sur un jour
+      // précédent n'a plus lieu d'être, tout se joue désormais sur aujourd'hui.
+      setJourActif(today());
+      setReporte(false);
       if (res.closed) {
         setErrors([...errs, `${res.closed} ticket(s) absent(s) du fichier → marqué(s) traité(s)`]);
       }
@@ -167,7 +179,7 @@ export default function Dashboard() {
       for (const r of refs) next[r] = { statut: 'fait', motif: job.tickets[0].arbitrage_motif, source: 'orienteur' };
       setStatuts(next);
     }
-    pushArbitrage(db, refs, decision).catch((e) => alert(`Arbitrage non enregistré : ${e.message}. Rafraîchis la page.`));
+    pushArbitrage(db, refs, decision, jourActif).catch((e) => alert(`Arbitrage non enregistré : ${e.message}. Rafraîchis la page.`));
   }
 
   // ── Distribution ──────────────────────────────────────────
@@ -317,7 +329,7 @@ export default function Dashboard() {
     const refs = job.tickets.map((t) => t.ref);
     for (const r of refs) next[r] = newTech || null;
     setAssign(next);
-    pushAssign(db, refs, newTech).catch((e) => alert(`Réaffectation non enregistrée : ${e.message}. Rafraîchis la page.`));
+    pushAssign(db, refs, newTech, jourActif).catch((e) => alert(`Réaffectation non enregistrée : ${e.message}. Rafraîchis la page.`));
   }
 
   // ── WhatsApp ──────────────────────────────────────────────
@@ -379,6 +391,11 @@ export default function Dashboard() {
 
       {/* Upload */}
       <section style={S.card}>
+        {reporte && (
+          <div style={{ ...S.warn, marginBottom: 10, display: 'block' }}>
+            ⚠ Aucun fichier chargé aujourd'hui — tu vois l'état du {jourActif} (affectations déjà faites). Charge le fichier du jour pour le mettre à jour.
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
           <button style={S.btnPrimary} onClick={() => fileRef.current?.click()} disabled={busy}>
             {busy ? '⏳ Enregistrement…' : '📂 Charger le fichier du jour (.ods / .xlsx)'}
