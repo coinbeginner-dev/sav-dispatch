@@ -146,6 +146,11 @@ vue4 = await getVue();
 assert.equal(vue4.commandes.find((c) => c.ref === 'R112').statut, 'annule');
 ok('Annulé enregistré');
 
+await setStatut(['R113'], 'planifie', { source: 'chef' });
+vue4 = await getVue();
+assert.equal(vue4.commandes.find((c) => c.ref === 'R113').statut, 'planifie');
+ok('Planifié enregistré');
+
 const hist = await getHistorique(['R110']);
 assert.equal(hist.R110.length, 1);
 assert.equal(hist.R110[0].po, 'PO-12345');
@@ -160,6 +165,21 @@ assert.equal(r110b.adresse, 'Nouvelle adresse', 'adresse mise a jour');
 assert.equal(r110b.statut, 'fait', 'le statut Fait deja pose reste intact malgre le reimport');
 assert.equal(r110b.po, 'PO-12345', 'le PO reste intact');
 ok('un réimport met à jour les champs descriptifs sans jamais toucher au statut/PO/motif déjà posés');
+
+console.log('\n── Planifié compte comme charge active pour le plafond de 10 ──');
+// EQUIPE A a deja 10 commandes actives (test du dispatch auto plus haut). On
+// affecte et planifie R200 (un tout autre SRO) a EQUIPE A : sa charge active
+// passe a 11 -> plus aucune commande d'un SRO connu de EQUIPE A ne doit lui
+// etre dispatchee automatiquement, exactement comme si elle etait "en cours".
+await importCommandes([C('R200', 'ZONE-PLAN-1', '2026-07-01')], { day: '2026-08-04', avecStatutDepart: false });
+await assignTeam(['R200'], 'EQUIPE A');
+await setStatut(['R200'], 'planifie', { source: 'chef' });
+
+const lot2 = [];
+for (let i = 1; i <= 5; i++) lot2.push(C(`R22${String(i).padStart(2, '0')}`, 'ZONE-PLAN-1', `2026-07-2${i}`));
+const res4 = await importCommandes(lot2, { day: '2026-08-05', avecStatutDepart: false });
+assert.equal(res4.dispatchees, 0, "EQUIPE A a deja 10 actives + R200 planifie (11) -> plus de place disponible");
+ok('un statut Planifié occupe une place active et bloque le dispatch auto au-dela du plafond, contrairement a Fait/Annulé qui liberent la place');
 
 await pg.close();
 console.log(`\n✅ ${pass} groupes de vérifications passés — la couche base NA est saine.\n`);

@@ -3,9 +3,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseCommandes, slaClass, buildTeamMessage, waLinkNa } from '../../lib/na-dispatch';
 import { loadInitial, saveSettings, pushImport, pushStatut, pushAssign } from '../../lib/na-store';
 
-const STATUT_LABEL = { fait: '✅ Fait', blocage: '⛔ Blocage', annule: '🚫 Annulé' };
+const STATUT_LABEL = { fait: '✅ Fait', planifie: '📅 Planifié', blocage: '⛔ Blocage', annule: '🚫 Annulé' };
 const MOTIFS_BLOCAGE = ['SORTIE PCO', 'Besoin Contact Client', 'INJOIGNABLE', 'TUBAGE COTE GAINE', 'DEJA INST', 'Autre'];
 const CAPACITE_JOUR = 10;
+// Noms d'opérateur tels qu'ils apparaissent dans le fichier -> libellé court
+// affiché en tag. Un opérateur absent de cette liste s'affiche tel quel.
+const OPERATEUR_LABEL = { 'Maroc Telecom': 'IAM', 'Orange Maroc': 'Orange', 'Inwi': 'INWI' };
+const OPERATEUR_COLOR = { IAM: '#0070C0', Orange: '#E8841A', INWI: '#7A1FA2' };
+function operateurLabel(op) { return OPERATEUR_LABEL[op] || op || '?'; }
 
 export default function NaDashboard() {
   const [teams, setTeams] = useState([]);
@@ -18,6 +23,8 @@ export default function NaDashboard() {
   const [showSettings, setShowSettings] = useState(false);
   const [waCompose, setWaCompose] = useState(null);
   const [recherche, setRecherche] = useState('');
+  const [voirBlocages, setVoirBlocages] = useState(true);
+  const [voirNonAffectees, setVoirNonAffectees] = useState(true);
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -104,11 +111,19 @@ export default function NaDashboard() {
     const fait = commandes.filter((c) => c.statut === 'fait').length;
     const annule = commandes.filter((c) => c.statut === 'annule').length;
     const blocage = commandes.filter((c) => c.statut === 'blocage').length;
+    const planifie = commandes.filter((c) => c.statut === 'planifie').length;
     const cloture = fait + annule;
-    const aTraiter = total - cloture - blocage;
+    const aTraiter = total - cloture - blocage - planifie;
     const rouge = commandes.filter((c) => !c.statut && slaClass(c.date_reception).key === 'rouge').length;
     const orange = commandes.filter((c) => !c.statut && slaClass(c.date_reception).key === 'orange').length;
-    return { total, fait, annule, blocage, cloture, aTraiter, rouge, orange };
+    // Répartition par opérateur (IAM / Orange / INWI...), pour savoir combien
+    // de commandes viennent de chacun, tous statuts confondus.
+    const parOperateur = {};
+    for (const c of commandes) {
+      const lbl = operateurLabel(c.operateur);
+      parOperateur[lbl] = (parOperateur[lbl] || 0) + 1;
+    }
+    return { total, fait, annule, blocage, planifie, cloture, aTraiter, rouge, orange, parOperateur };
   }, [commandes]);
 
   const blocages = useMemo(
@@ -123,11 +138,14 @@ export default function NaDashboard() {
     [commandes, rechercheNorm],
   );
 
+  // Planifié reste une commande active (juste programmée avec le client) :
+  // elle reste visible dans le dispatch en cours, contrairement à Fait/Annulé
+  // qui passent dans le tiroir "traités".
   const parEquipe = useMemo(() => {
     const map = {};
     for (const t of activeTeams) {
       map[t.name] = commandes
-        .filter((c) => !c.statut && c.assigned_team === t.name)
+        .filter((c) => (!c.statut || c.statut === 'planifie') && c.assigned_team === t.name)
         .sort((a, b) => (a.date_reception || '').localeCompare(b.date_reception || ''));
     }
     return map;
@@ -136,7 +154,24 @@ export default function NaDashboard() {
   const traiteesParEquipe = useMemo(() => {
     const map = {};
     for (const t of activeTeams) {
-      map[t.name] = commandes.filter((c) => c.statut && c.statut !== 'blocage' && c.assigned_team === t.name);
+      map[t.name] = commandes.filter((c) => (c.statut === 'fait' || c.statut === 'annule') && c.assigned_team === t.name);
+    }
+    return map;
+  }, [commandes, activeTeams]);
+
+  // KPI d'avancement par équipe : Total / Planifié / Fait / Blocage, calculés
+  // sur TOUTES les commandes de l'équipe (y compris celles en blocage, qui ne
+  // sont pas dans sa colonne active mais restent les siennes).
+  const statsParEquipe = useMemo(() => {
+    const map = {};
+    for (const t of activeTeams) {
+      const siennes = commandes.filter((c) => c.assigned_team === t.name);
+      map[t.name] = {
+        total: siennes.length,
+        planifie: siennes.filter((c) => c.statut === 'planifie').length,
+        fait: siennes.filter((c) => c.statut === 'fait').length,
+        blocage: siennes.filter((c) => c.statut === 'blocage').length,
+      };
     }
     return map;
   }, [commandes, activeTeams]);
@@ -191,8 +226,15 @@ export default function NaDashboard() {
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
               <StatCard n={stats.total} l="Total" bg="#F5F7FA" c="#0F1B3D" />
               <StatCard n={stats.cloture} l={`Clôturé (fait ${stats.fait} · annulé ${stats.annule})`} bg="#EAFAF1" c="#00753A" />
+              <StatCard n={stats.planifie} l="Planifié" bg="#EAF3FA" c="#0070C0" />
               <StatCard n={stats.aTraiter} l="À traiter" bg="#EAF3FA" c="#0070C0" />
               <StatCard n={stats.blocage} l="En blocage" bg="#FEF2F2" c="#C0392B" />
+            </div>
+            <div style={{ fontSize: 12, color: '#8892A4', margin: '10px 0 6px 2px' }}>par opérateur :</div>
+            <div style={S.statRow}>
+              {Object.entries(stats.parOperateur).map(([lbl, n]) => (
+                <Stat key={lbl} n={n} l={lbl} c={OPERATEUR_COLOR[lbl] || '#0F1B3D'} />
+              ))}
             </div>
             <div style={S.statRow}>
               <Stat n={stats.rouge} l="🔴 SLA dépassé (≥48h)" c="#C0392B" />
@@ -209,19 +251,33 @@ export default function NaDashboard() {
 
       {blocages.length > 0 && (
         <section style={{ ...S.card, borderLeft: '4px solid #C0392B' }}>
-          <h3 style={{ ...S.h3, color: '#C0392B' }}>⛔ Blocages en attente ({blocages.length})</h3>
-          <p style={S.hint}>Ces commandes sont bloquées sur le terrain — elles ne comptent pas dans les 10/jour et n'apparaissent pas dans les messages WhatsApp tant qu'elles restent en blocage.</p>
-          {blocages.map((c) => (
-            <CommandeRow key={c.ref} c={c} teams={activeTeams} onChange={(v) => reassign(c.ref, v)}
-              historique={historique[c.ref]} onStatut={(s, extra) => marquerStatut([c.ref], s, extra)} />
-          ))}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ ...S.h3, color: '#C0392B', margin: 0 }}>⛔ Blocages en attente ({blocages.length})</h3>
+            <button style={S.btnGhost} onClick={() => setVoirBlocages((v) => !v)}>
+              {voirBlocages ? '▲ Réduire' : '▼ Afficher'}
+            </button>
+          </div>
+          {voirBlocages && (
+            <>
+              <p style={S.hint}>Ces commandes sont bloquées sur le terrain — elles ne comptent pas dans les 10/jour et n'apparaissent pas dans les messages WhatsApp tant qu'elles restent en blocage.</p>
+              {blocages.map((c) => (
+                <CommandeRow key={c.ref} c={c} teams={activeTeams} onChange={(v) => reassign(c.ref, v)}
+                  historique={historique[c.ref]} onStatut={(s, extra) => marquerStatut([c.ref], s, extra)} />
+              ))}
+            </>
+          )}
         </section>
       )}
 
       {nonAffectees.length > 0 && (
         <section style={{ ...S.card, borderLeft: '4px solid #B87700' }}>
-          <h3 style={{ ...S.h3, color: '#B87700' }}>⚠ Non affectées ({nonAffectees.length}) — SRO inconnu ou équipe inactive</h3>
-          {nonAffectees.map((c) => (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ ...S.h3, color: '#B87700', margin: 0 }}>⚠ Non affectées ({nonAffectees.length}) — SRO inconnu ou équipe inactive</h3>
+            <button style={S.btnGhost} onClick={() => setVoirNonAffectees((v) => !v)}>
+              {voirNonAffectees ? '▲ Réduire' : '▼ Afficher'}
+            </button>
+          </div>
+          {voirNonAffectees && nonAffectees.map((c) => (
             <CommandeRow key={c.ref} c={c} teams={activeTeams} onChange={(v) => reassign(c.ref, v)}
               historique={historique[c.ref]} onStatut={(s, extra) => marquerStatut([c.ref], s, extra)} />
           ))}
@@ -233,6 +289,7 @@ export default function NaDashboard() {
           {activeTeams.map((team) => (
             <TeamColumn key={team.name} team={team} commandes={parEquipe[team.name] || []}
               traitees={traiteesParEquipe[team.name] || []} teams={activeTeams}
+              stats={statsParEquipe[team.name]}
               onChange={reassign} onStatut={(refs, s, extra) => marquerStatut(refs, s, extra)}
               onSend={() => ouvrirEnvoi(team.name)} historique={historique} filtre={rechercheNorm} correspond={correspond} />
           ))}
@@ -280,7 +337,7 @@ function Stat({ n, l, c }) {
   );
 }
 
-function TeamColumn({ team, commandes, traitees, teams, onChange, onStatut, onSend, historique, filtre, correspond }) {
+function TeamColumn({ team, commandes, traitees, teams, stats, onChange, onStatut, onSend, historique, filtre, correspond }) {
   const [voirTraitees, setVoirTraitees] = useState(false);
   const affichees = filtre ? commandes.filter(correspond) : commandes;
   const traiteesAffichees = filtre ? traitees.filter(correspond) : traitees;
@@ -298,6 +355,14 @@ function TeamColumn({ team, commandes, traitees, teams, onChange, onStatut, onSe
         </div>
         <button style={S.btnWa} onClick={onSend} disabled={!affichees.length}>📱 WhatsApp</button>
       </div>
+      {stats && (
+        <div style={{ fontSize: 11, color: '#556', marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
+          <span>Total <strong>{stats.total}</strong></span>
+          <span style={{ color: '#0070C0' }}>Planifié <strong>{stats.planifie}</strong></span>
+          <span style={{ color: '#00753A' }}>Fait <strong>{stats.fait}</strong></span>
+          <span style={{ color: '#C0392B' }}>Blocage <strong>{stats.blocage}</strong></span>
+        </div>
+      )}
       <div style={{ maxHeight: 460, overflowY: 'auto' }}>
         {affichees.map((c) => (
           <CommandeRow key={c.ref} c={c} teams={teams} current={team.name} onChange={(v) => onChange(c.ref, v)}
@@ -339,16 +404,24 @@ function CommandeRow({ c, teams, current, onChange, historique, onStatut }) {
     setMotifPour(null); setTexteLibre('');
   }
 
+  const opLbl = operateurLabel(c.operateur);
+
   return (
     <div style={{
       ...S.job,
-      background: statut ? (statut === 'fait' ? '#EAFAF1' : statut === 'annule' ? '#F5F7FA' : '#FEF2F2') : (sla?.bg || '#fff'),
-      borderLeft: `4px solid ${statut ? (statut === 'fait' ? '#00963F' : statut === 'annule' ? '#8892A4' : '#C0392B') : (sla?.color || '#D7DCE5')}`,
-      opacity: statut ? 0.85 : 1,
+      background: statut ? (statut === 'fait' ? '#EAFAF1' : statut === 'annule' ? '#F5F7FA' : statut === 'planifie' ? '#EAF3FA' : '#FEF2F2') : (sla?.bg || '#fff'),
+      borderLeft: `4px solid ${statut ? (statut === 'fait' ? '#00963F' : statut === 'annule' ? '#8892A4' : statut === 'planifie' ? '#0070C0' : '#C0392B') : (sla?.color || '#D7DCE5')}`,
+      opacity: statut === 'fait' || statut === 'annule' ? 0.85 : 1,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: '#0F1B3D' }}>{c.ref}</div>
+          <div style={{ fontWeight: 700, fontSize: 13, color: '#0F1B3D' }}>
+            {c.ref}
+            <span style={{
+              marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#fff',
+              background: OPERATEUR_COLOR[opLbl] || '#8892A4', padding: '1px 6px', borderRadius: 4, verticalAlign: 'middle',
+            }}>{opLbl}</span>
+          </div>
           {!statut && sla && <div style={{ fontSize: 12, color: sla.color, fontWeight: 600 }}>{sla.label}</div>}
           <div style={{ fontSize: 12, color: '#556' }}>
             {c.adresse || '—'}{c.sro ? ` · SRO ${c.sro}` : ''}
@@ -365,7 +438,7 @@ function CommandeRow({ c, teams, current, onChange, historique, onStatut }) {
 
       {statut && (
         <div style={S.statutBar}>
-          <span style={{ fontWeight: 700, color: statut === 'fait' ? '#00753A' : statut === 'annule' ? '#556' : '#C0392B' }}>
+          <span style={{ fontWeight: 700, color: statut === 'fait' ? '#00753A' : statut === 'annule' ? '#556' : statut === 'planifie' ? '#0070C0' : '#C0392B' }}>
             {STATUT_LABEL[statut] || statut}
           </span>
           {c.po && <span style={{ color: '#8892A4' }}>· PO {c.po}</span>}
@@ -377,6 +450,7 @@ function CommandeRow({ c, teams, current, onChange, historique, onStatut }) {
 
       {!statut && !motifPour && (
         <div style={S.statutBar}>
+          <button style={S.btnStatut} onClick={() => onStatut('planifie', {})}>📅 Planifié</button>
           <button style={S.btnStatut} onClick={() => setMotifPour('fait')}>✅ Fait</button>
           <button style={S.btnStatut} onClick={() => setMotifPour('blocage')}>⛔ Blocage</button>
           <button style={S.btnStatut} onClick={() => onStatut('annule', {})}>🚫 Annulé</button>
