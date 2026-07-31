@@ -10,7 +10,9 @@
     "test:db": "node test/db.test.mjs",
     "test:extraction": "node test/extraction.test.mjs",
     "test:export": "node test/export.test.mjs",
-    "test:dispatch": "node test/dispatch.test.mjs"
+    "test:dispatch": "node test/dispatch.test.mjs",
+    "test:na-db": "node test/na-db.test.mjs",
+    "test:na-dispatch": "node test/na-dispatch.test.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
