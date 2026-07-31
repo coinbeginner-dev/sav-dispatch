@@ -159,18 +159,25 @@ export default function NaDashboard() {
     return map;
   }, [commandes, activeTeams]);
 
-  // KPI d'avancement par équipe : Total / Planifié / Fait / Blocage, calculés
-  // sur TOUTES les commandes de l'équipe (y compris celles en blocage, qui ne
-  // sont pas dans sa colonne active mais restent les siennes).
+  // KPI d'avancement par équipe : Total / Planifié / Fait / Blocage + le
+  // compte par opérateur (IAM/Orange/INWI), calculés sur TOUTES les commandes
+  // de l'équipe (y compris celles en blocage, qui ne sont pas dans sa colonne
+  // active mais restent les siennes) — pas juste le total global.
   const statsParEquipe = useMemo(() => {
     const map = {};
     for (const t of activeTeams) {
       const siennes = commandes.filter((c) => c.assigned_team === t.name);
+      const parOperateur = {};
+      for (const c of siennes) {
+        const lbl = operateurLabel(c.operateur);
+        parOperateur[lbl] = (parOperateur[lbl] || 0) + 1;
+      }
       map[t.name] = {
         total: siennes.length,
         planifie: siennes.filter((c) => c.statut === 'planifie').length,
         fait: siennes.filter((c) => c.statut === 'fait').length,
         blocage: siennes.filter((c) => c.statut === 'blocage').length,
+        parOperateur,
       };
     }
     return map;
@@ -356,12 +363,19 @@ function TeamColumn({ team, commandes, traitees, teams, stats, onChange, onStatu
         <button style={S.btnWa} onClick={onSend} disabled={!affichees.length}>📱 WhatsApp</button>
       </div>
       {stats && (
-        <div style={{ fontSize: 11, color: '#556', marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
-          <span>Total <strong>{stats.total}</strong></span>
-          <span style={{ color: '#0070C0' }}>Planifié <strong>{stats.planifie}</strong></span>
-          <span style={{ color: '#00753A' }}>Fait <strong>{stats.fait}</strong></span>
-          <span style={{ color: '#C0392B' }}>Blocage <strong>{stats.blocage}</strong></span>
-        </div>
+        <>
+          <div style={{ fontSize: 11, color: '#556', marginBottom: 4, display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
+            <span>Total <strong>{stats.total}</strong></span>
+            <span style={{ color: '#0070C0' }}>Planifié <strong>{stats.planifie}</strong></span>
+            <span style={{ color: '#00753A' }}>Fait <strong>{stats.fait}</strong></span>
+            <span style={{ color: '#C0392B' }}>Blocage <strong>{stats.blocage}</strong></span>
+          </div>
+          <div style={{ fontSize: 11, color: '#8892A4', marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
+            {Object.entries(stats.parOperateur).map(([lbl, n]) => (
+              <span key={lbl} style={{ color: OPERATEUR_COLOR[lbl] || '#8892A4' }}>{lbl} <strong>{n}</strong></span>
+            ))}
+          </div>
+        </>
       )}
       <div style={{ maxHeight: 460, overflowY: 'auto' }}>
         {affichees.map((c) => (
