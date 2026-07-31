@@ -220,25 +220,34 @@ export default function Dashboard() {
     const hd = tickets.filter((t) => t.tranche === 'HD').length;
     const rougesEnAttente = tickets.filter((t) => t.delai >= 2 && !statuts[t.ref]).length;
 
+    // Statut "effectif" d'un ticket pour les compteurs : son statut posé
+    // aujourd'hui, ou — s'il est en attente d'arbitrage — son dernier statut
+    // connu (le même que celui affiché dans la liste "À arbitrer"). Sans ce
+    // repli, un ticket bloqué hier qui attend juste une décision retombait
+    // à tort dans "À planifier" alors qu'il est bel et bien en blocage.
+    const effectif = (t) => statuts[t.ref]?.statut
+      || ((t.hors_dispatch && !t.arbitrage_decide) ? t.arbitrage : null);
+
     // Clôturé = marqué Fait, ou Clos (clôturé avec motif par l'orienteur —
     // même effet pour le dispatch, mais compté à part pour ne pas confondre
     // avec une intervention réellement terminée sur le terrain).
     // Reliquat = le reste, quel qu'il soit (en attente, planifié, bloqué, ou
     // en arbitrage). Les 3 rubriques ci-dessous partitionnent ce reliquat.
-    const fait = tickets.filter((t) => statuts[t.ref]?.statut === 'fait').length;
-    const clos = tickets.filter((t) => statuts[t.ref]?.statut === 'clos').length;
+    const fait = tickets.filter((t) => effectif(t) === 'fait').length;
+    const clos = tickets.filter((t) => effectif(t) === 'clos').length;
     const cloture = fait + clos;
     const reliquat = total - cloture;
-    const planifie = tickets.filter((t) => statuts[t.ref]?.statut === 'planifie').length;
-    const blocage = tickets.filter((t) => statuts[t.ref]?.statut === 'blocage').length;
-    // À planifier = aucun bouton pressé aujourd'hui. Inclut aussi les tickets
-    // encore en arbitrage (visibles séparément dans la section dédiée).
+    const planifie = tickets.filter((t) => effectif(t) === 'planifie').length;
+    const blocage = tickets.filter((t) => effectif(t) === 'blocage').length;
+    // À planifier = vraiment jamais renseigné, ni aujourd'hui ni un jour
+    // précédent — distinct des tickets en arbitrage qui, eux, ont déjà un
+    // statut connu (compté ci-dessus dans planifié/blocage).
     const aPlanifier = reliquat - planifie - blocage;
 
     // Splitters : uniquement les groupes qui ont encore au moins un ticket
     // non clôturé — un splitter entièrement fait/clos ne compte plus.
     const splitters = new Set(
-      tickets.filter((t) => !['fait', 'clos'].includes(statuts[t.ref]?.statut)).filter((t) => t.splitter).map((t) => t.splitter),
+      tickets.filter((t) => !['fait', 'clos'].includes(effectif(t))).filter((t) => t.splitter).map((t) => t.splitter),
     ).size;
 
     return { total, cloture, clos, reliquat, aPlanifier, planifie, blocage, splitters,
