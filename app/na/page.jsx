@@ -165,11 +165,14 @@ export default function NaDashboard() {
           <span style={S.title}> Suivi &amp; Dispatch — FTTH Connect</span>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <nav style={{ display: 'flex', gap: 4, background: '#F5F7FA', borderRadius: 10, padding: 3 }}>
+            <a href="/" style={{ padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, color: '#0F1B3D', textDecoration: 'none' }}>SAV</a>
+            <span style={{ padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, background: '#0070C0', color: '#fff' }}>NA</span>
+          </nav>
           <span style={S.date}>{dateStr}</span>
           <span style={db ? S.dbOn : S.dbOff}>{db ? '🟢 base connectée' : '🟡 mode local'}</span>
           {db && <button style={S.btnGhost} onClick={rafraichir} disabled={busy}>↻ Rafraîchir</button>}
           <button style={S.btnGhost} onClick={() => setShowSettings(true)}>⚙ Réglages</button>
-          <a href="/" style={{ ...S.btnGhost, textDecoration: 'none' }}>← SAV</a>
           <a href="/api/logout" style={{ ...S.btnGhost, textDecoration: 'none' }}>Déconnexion</a>
         </div>
       </header>

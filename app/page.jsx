@@ -397,6 +397,10 @@ export default function Dashboard() {
           <span style={S.title}> SAV Dispatch — Haddaouia</span>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <nav style={{ display: 'flex', gap: 4, background: '#F5F7FA', borderRadius: 10, padding: 3 }}>
+            <span style={{ padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, background: '#0F1B3D', color: '#fff' }}>SAV</span>
+            <a href="/na" style={{ padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, color: '#0F1B3D', textDecoration: 'none' }}>NA</a>
+          </nav>
           <span style={S.date}>{dateStr}</span>
           <span style={db ? S.dbOn : S.dbOff} title={db
             ? 'Réglages et historique partagés entre tous les appareils'
