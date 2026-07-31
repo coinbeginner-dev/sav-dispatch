@@ -1,7 +1,9 @@
-// Parsing du fichier "Commandes" NA + SLA 48h + suggestion SRO→équipe.
+// Parsing du fichier "Commandes" NA + SLA 48h.
+// La correspondance SRO -> équipe (apprise des affectations déjà faites,
+// pas configurée) est testée côté base : voir test/na-db.test.mjs.
 // Lancer avec : npm run test:na-dispatch
 import assert from 'node:assert/strict';
-import { parseCommandes, slaClass, suggestTeamBySro, normSro } from '../lib/na-dispatch.js';
+import { parseCommandes, slaClass } from '../lib/na-dispatch.js';
 
 let pass = 0;
 const ok = (l) => { pass++; console.log(`  ✓ ${l}`); };
@@ -40,14 +42,5 @@ assert.equal(slaClass('2026-07-29T00:00:00'.slice(0, 10), maintenant).key, 'roug
 assert.equal(slaClass('2026-07-30T00:00:00'.slice(0, 10), maintenant).key, 'orange', '24-48h -> orange');
 assert.equal(slaClass('2026-07-31T00:00:00'.slice(0, 10), maintenant).key, 'vert', '<24h -> vert');
 ok('classification SLA 48h/24h cohérente avec la date de réception');
-
-console.log('\n── Suggestion équipe par SRO ──');
-const commandesSro = [{ ref: 'R1', sroKey: normSro('OCHA3F2-ZO-SP1') }, { ref: 'R2', sroKey: normSro('SRO-INCONNU') }];
-const teams = [{ name: 'EQUIPE A', active: true }, { name: 'EQUIPE B', active: false }];
-const zones = [{ sro: 'OCHA3F2-ZO-SP1', team: 'EQUIPE A' }, { sro: 'AUTRE', team: 'EQUIPE B' }];
-const suggestion = suggestTeamBySro(commandesSro, zones, teams);
-assert.equal(suggestion.R1, 'EQUIPE A');
-assert.equal(suggestion.R2, null, 'SRO non mappé -> non affecté');
-ok('le SRO suggère la bonne équipe, ou rien si inconnu / équipe inactive');
 
 console.log(`\n✅ ${pass} groupes de vérifications passés — parsing NA prêt.\n`);

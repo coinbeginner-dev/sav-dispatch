@@ -9,7 +9,6 @@ const CAPACITE_JOUR = 10;
 
 export default function NaDashboard() {
   const [teams, setTeams] = useState([]);
-  const [sro, setSro] = useState([]);
   const [commandes, setCommandes] = useState([]);
   const [historique, setHistorique] = useState({});
   const [db, setDb] = useState(false);
@@ -23,7 +22,7 @@ export default function NaDashboard() {
 
   useEffect(() => {
     loadInitial().then((s) => {
-      setDb(s.db); setTeams(s.teams); setSro(s.sro);
+      setDb(s.db); setTeams(s.teams);
       setCommandes(s.commandes); setHistorique(s.historique);
       if (s.commandes.length) setFileName('commandes en base');
     });
@@ -33,7 +32,7 @@ export default function NaDashboard() {
     setBusy(true);
     try {
       const s = await loadInitial();
-      setDb(s.db); setTeams(s.teams); setSro(s.sro);
+      setDb(s.db); setTeams(s.teams);
       setCommandes(s.commandes); setHistorique(s.historique);
       if (s.commandes.length) setFileName('commandes en base');
     } finally { setBusy(false); }
@@ -83,10 +82,10 @@ export default function NaDashboard() {
     pushAssign(db, [ref], team).catch((e) => alert(`Réaffectation non enregistrée : ${e.message}. Rafraîchis la page.`));
   }
 
-  async function persistSettings(newTeams, newSro) {
-    setTeams(newTeams); setSro(newSro);
+  async function persistSettings(newTeams) {
+    setTeams(newTeams);
     try {
-      await saveSettings(db, newTeams, newSro);
+      await saveSettings(db, newTeams);
     } catch (e) {
       alert(`Réglages non enregistrés : ${e.message}`);
       return;
@@ -248,8 +247,8 @@ export default function NaDashboard() {
       )}
 
       {showSettings && (
-        <NaSettings teams={teams} sro={sro}
-          onSave={(t, z) => { persistSettings(t, z); setShowSettings(false); }}
+        <NaSettings teams={teams}
+          onSave={(t) => { persistSettings(t); setShowSettings(false); }}
           onClose={() => setShowSettings(false)} />
       )}
 
@@ -481,70 +480,46 @@ function WaComposeModal({ teamName, commandes, onClose, onEnvoyer }) {
   );
 }
 
-function NaSettings({ teams, sro, onSave, onClose }) {
-  const [tab, setTab] = useState('teams');
+function NaSettings({ teams, onSave, onClose }) {
   const [dTeams, setDTeams] = useState(teams.map((t) => ({ ...t })));
-  const [dSro, setDSro] = useState(sro.map((z) => ({ ...z })));
   const [dirty, setDirty] = useState(false);
   const setT = (fn) => { setDirty(true); setDTeams(fn); };
-  const setZ = (fn) => { setDirty(true); setDSro(fn); };
 
   function handleClose() {
     if (dirty && !confirm('Des modifications non enregistrées seront perdues. Fermer quand même ?')) return;
     onClose();
   }
   function handleSave() {
-    onSave(dTeams.filter((t) => t.name.trim()), dSro.filter((z) => z.sro.trim()));
+    onSave(dTeams.filter((t) => t.name.trim()));
   }
 
   return (
     <div style={S.modalBg} onClick={handleClose}>
       <div style={S.modal} onClick={(e) => e.stopPropagation()}>
         <h2 style={{ margin: '0 0 16px', fontSize: 18, color: '#0F1B3D' }}>⚙ Réglages NA</h2>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          <button style={tab === 'teams' ? S.tabOn : S.tabOff} onClick={() => setTab('teams')}>Équipes</button>
-          <button style={tab === 'sro' ? S.tabOn : S.tabOff} onClick={() => setTab('sro')}>SRO → équipe</button>
+        <div>
+          <p style={S.hint}>
+            Les 4 équipes NA. Le dispatch auto complète chaque équipe active jusqu'à {CAPACITE_JOUR} commandes en
+            cours — dès qu'une commande d'un SRO donné a déjà été affectée (à la main ou par un dispatch précédent)
+            à une équipe, les commandes suivantes du même SRO la suivent automatiquement. Pas de correspondance
+            SRO à configurer : elle vient du SRO déjà présent dans le fichier Excel et des affectations déjà faites.
+          </p>
+          {dTeams.map((t, i) => (
+            <div key={i} style={S.settingRow}>
+              <input style={{ ...S.inputSm, width: 160 }} placeholder="Nom" value={t.name}
+                onChange={(e) => setT(dTeams.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
+              <input style={{ ...S.inputSm, flex: 1 }} placeholder="N° WhatsApp (212...)" value={t.phone || ''}
+                onChange={(e) => setT(dTeams.map((x, j) => j === i ? { ...x, phone: e.target.value } : x))} />
+              <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <input type="checkbox" checked={t.active !== false}
+                  onChange={(e) => setT(dTeams.map((x, j) => j === i ? { ...x, active: e.target.checked } : x))} />
+                active
+              </label>
+              <button style={S.btnDel} title="Supprimer" onClick={() => setT(dTeams.filter((_, j) => j !== i))}>🗑</button>
+            </div>
+          ))}
+          <button style={S.btnAdd} onClick={() => setT([...dTeams, { name: '', phone: '', active: true }])}>+ Ajouter une équipe</button>
         </div>
-
-        {tab === 'teams' && (
-          <div>
-            <p style={S.hint}>Les 4 équipes NA. Le dispatch auto complète chaque équipe active jusqu'à {CAPACITE_JOUR} commandes en cours.</p>
-            {dTeams.map((t, i) => (
-              <div key={i} style={S.settingRow}>
-                <input style={{ ...S.inputSm, width: 160 }} placeholder="Nom" value={t.name}
-                  onChange={(e) => setT(dTeams.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
-                <input style={{ ...S.inputSm, flex: 1 }} placeholder="N° WhatsApp (212...)" value={t.phone || ''}
-                  onChange={(e) => setT(dTeams.map((x, j) => j === i ? { ...x, phone: e.target.value } : x))} />
-                <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <input type="checkbox" checked={t.active !== false}
-                    onChange={(e) => setT(dTeams.map((x, j) => j === i ? { ...x, active: e.target.checked } : x))} />
-                  active
-                </label>
-                <button style={S.btnDel} title="Supprimer" onClick={() => setT(dTeams.filter((_, j) => j !== i))}>🗑</button>
-              </div>
-            ))}
-            <button style={S.btnAdd} onClick={() => setT([...dTeams, { name: '', phone: '', active: true }])}>+ Ajouter une équipe</button>
-          </div>
-        )}
-
-        {tab === 'sro' && (
-          <div>
-            <p style={S.hint}>Correspondance SRO → équipe, comme les MSAN côté SAV. Sert au dispatch automatique.</p>
-            {dSro.map((z, i) => (
-              <div key={i} style={S.settingRow}>
-                <input style={{ ...S.inputSm, flex: 1 }} placeholder="SRO" value={z.sro}
-                  onChange={(e) => setZ(dSro.map((x, j) => j === i ? { ...x, sro: e.target.value } : x))} />
-                <select style={S.select} value={z.team}
-                  onChange={(e) => setZ(dSro.map((x, j) => j === i ? { ...x, team: e.target.value } : x))}>
-                  <option value="">— équipe —</option>
-                  {dTeams.filter((t) => t.name.trim()).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
-                </select>
-                <button style={S.btnDel} title="Supprimer" onClick={() => setZ(dSro.filter((_, j) => j !== i))}>🗑</button>
-              </div>
-            ))}
-            <button style={S.btnAdd} onClick={() => setZ([...dSro, { sro: '', team: dTeams[0]?.name || '' }])}>+ Ajouter un SRO</button>
-          </div>
-        )}
 
         <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #EEF1F6', display: 'flex', justifyContent: 'flex-end' }}>
           <button style={S.btnSave} onClick={handleSave}>💾 Enregistrer</button>

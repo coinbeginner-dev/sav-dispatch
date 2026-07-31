@@ -57,16 +57,14 @@ useSqlClient(makeSql(pg));
 console.log('\n── Réglages ──');
 const s0 = await getSettings();
 assert.equal(s0.teams.length, 0);
-assert.equal(s0.sro.length, 0);
+assert.equal(s0.sro, undefined, "plus de correspondance SRO a configurer dans les reglages");
 ok('schéma créé, réglages vides au départ (pas de données par défaut imposées)');
 
 const s1 = await saveSettings({
   teams: [{ name: 'EQUIPE A', phone: '212600000001', active: true }, { name: 'EQUIPE B', phone: '212600000002', active: true }],
-  sro: [{ sro: 'OCHA3F2-ZO-SP1', team: 'EQUIPE A' }, { sro: 'OCHA-ZO-SP2', team: 'EQUIPE B' }],
 });
 assert.equal(s1.teams.length, 2);
-assert.equal(s1.sro.length, 2);
-ok('équipes et correspondance SRO enregistrées');
+ok('équipes enregistrées (pas de SRO a configurer)');
 
 console.log('\n── Import de démarrage (avec statut de départ) ──');
 const seed = await importCommandes([
@@ -76,6 +74,9 @@ const seed = await importCommandes([
   C('R004', 'OCHA3F2-ZO-SP1', '2026-07-23', {}),
 ], { day: '2026-07-31', avecStatutDepart: true });
 assert.equal(seed.nouvelles, 4);
+// Aucune commande de ce SRO n'a jamais ete affectee -> tout reste non affecte,
+// aucun dispatch auto au premier import (rien a apprendre encore).
+assert.equal(seed.dispatchees, 0, 'premier import de ce SRO : aucune equipe connue, rien a dispatcher automatiquement');
 const vue1 = await getVue();
 const parRef = Object.fromEntries(vue1.commandes.map((c) => [c.ref, c]));
 assert.equal(parRef.R001.statut, 'annule');
@@ -83,25 +84,30 @@ assert.equal(parRef.R002.statut, 'fait');
 assert.equal(parRef.R003.statut, 'blocage');
 assert.equal(parRef.R003.motif, 'SORTIE PCO');
 assert.equal(parRef.R004.statut, null, 'pas de statut de départ -> actif par défaut');
+assert.equal(parRef.R004.assigned_team, null, 'aucune equipe connue pour ce SRO -> non affecte');
 assert.equal(vue1.historique.R003?.[0]?.source, 'seed', "le point de depart est trace dans l'historique");
 ok('le statut de départ (Annulée/Terminée/Blocage/En cours) est correctement seedé, avec historique');
 
-console.log('\n── Dispatch auto (plafond 10 par équipe) ──');
+console.log('\n── SRO -> équipe appris depuis une affectation manuelle ──');
+// L'orienteur affecte R004 (le seul actif) à EQUIPE A à la main : ça "apprend"
+// au systeme que ce SRO correspond a EQUIPE A pour les prochaines commandes.
+await assignTeam(['R004'], 'EQUIPE A');
+
 const lot = [];
 for (let i = 1; i <= 15; i++) {
   lot.push(C(`R1${String(i).padStart(2, '0')}`, 'OCHA3F2-ZO-SP1', `2026-07-${10 + i}`));
 }
 const res2 = await importCommandes(lot, { day: '2026-08-01', avecStatutDepart: false });
 assert.equal(res2.nouvelles, 15);
-// R004 (seed precedent) occupe deja 1 place chez EQUIPE A -> seules 9 des 15
-// nouvelles sont dispatchees pour completer jusqu'a 10, le reste (6) attend.
-assert.equal(res2.dispatchees, 9, "seules les commandes necessaires pour completer jusqu'a 10 sont auto-dispatchees");
+// R004 (affecte a la main juste avant) occupe deja 1 place chez EQUIPE A ->
+// seules 9 des 15 nouvelles sont dispatchees pour completer jusqu'a 10.
+assert.equal(res2.dispatchees, 9, "le systeme a appris EQUIPE A pour ce SRO et complete jusqu'a 10, sans plus");
 const vue2 = await getVue();
 const surEquipeA = vue2.commandes.filter((c) => c.assigned_team === 'EQUIPE A' && !c.statut);
 assert.equal(surEquipeA.length, 10, "EQUIPE A ne depasse jamais 10 commandes actives");
 const nonAffectees = vue2.commandes.filter((c) => !c.assigned_team && !c.statut && c.sro_key === 'OCHA3F2-ZO-SP1');
 assert.equal(nonAffectees.length, 6, 'le surplus au-dela de 10 reste non affecte');
-ok('le dispatch auto complete chaque equipe jusqu a 10 commandes actives, sans depasser');
+ok("une seule affectation manuelle suffit a apprendre le SRO -> equipe, sans aucune config, et le dispatch auto complete jusqu'a 10");
 
 console.log('\n── Blocage exclu du calcul des 10 ──');
 // R003 est en blocage : il ne doit pas compter dans la charge d'EQUIPE A
