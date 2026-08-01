@@ -479,7 +479,17 @@ function CommandeRow({ c, teams, current, onChange, historique, onStatut }) {
         </div>
       )}
 
-      {!statut && motifPour === 'fait' && (
+      {/* Une commande bloquée doit pouvoir se clôturer directement (résolue,
+          ou définitivement annulée) sans devoir d'abord cliquer "annuler"
+          pour repartir à blanc — comme Planifier/Clôturer côté arbitrage SAV. */}
+      {statut === 'blocage' && !motifPour && (
+        <div style={S.statutBar}>
+          <button style={S.btnStatut} onClick={() => setMotifPour('fait')}>✅ Marquer Fait</button>
+          <button style={S.btnStatut} onClick={() => onStatut('annule', {})}>🚫 Annulé (abandon)</button>
+        </div>
+      )}
+
+      {(!statut || statut === 'blocage') && motifPour === 'fait' && (
         <div style={{ ...S.statutBar, flexDirection: 'column', alignItems: 'stretch' }}>
           <input style={S.inputSm} placeholder="PO (référence de clôture)" value={texteLibre}
             onChange={(e) => setTexteLibre(e.target.value)} autoFocus />
