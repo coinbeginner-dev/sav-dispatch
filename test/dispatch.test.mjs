@@ -38,4 +38,15 @@ assert.equal(nouveau.tickets[0].msan, 'MZIC-Fadl2-3', 'OLT/MSAN toujours détect
 assert.equal(nouveau.tickets[0].famille, '', 'pas de colonne Famille dans ce format -> vide, pas d\'erreur');
 ok('nouveau format sans colonne Avancement : le splitter est quand même détecté via la colonne Splitter');
 
+console.log('\n── Format sans "OLT/MSAN" du tout (colonne "ZR" à la place) ──');
+const zrSeul = parseTickets([
+  ['N° Réclam.', 'ND', 'Client', 'ZR', 'Date Enreg.', 'Délai(j)', 'Famille', 'Contact client', 'ADRESSE', 'AVANCEMENT', 'TRANCHE'],
+  ['R300001', 'nd1', 'CLIENT G', 'OCHA3A3-ZO', '28/07/2026 13:01', 3.37, 'Pas de Synchro', '0600', 'CASA', 'Requalification', '>48H'],
+]);
+assert.equal(zrSeul.errors.length, 0, 'pas d\'erreur "OLT/MSAN introuvable" grâce au repli sur ZR');
+assert.equal(zrSeul.tickets.length, 1);
+assert.equal(zrSeul.tickets[0].msan, 'OCHA3A3-ZO', 'ZR sert de MSAN quand aucune colonne OLT/MSAN n\'existe');
+assert.equal(zrSeul.tickets[0].msanKey, 'OCHA3A3-ZO');
+ok('fichier sans colonne OLT/MSAN : la colonne ZR sert de repli pour la zone de dispatch');
+
 console.log(`\n✅ ${pass} groupes de vérifications passés — parsing des fichiers SAV prêt.\n`);
