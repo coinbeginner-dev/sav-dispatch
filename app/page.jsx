@@ -7,7 +7,7 @@ import {
 } from '../lib/dispatch';
 import {
   loadInitial, saveSettings, pushUpload, pushAssign, loadHistory,
-  pushStatut, flushStatuts, statutsEnAttente, pushArbitrage, today,
+  pushStatut, flushStatuts, statutsEnAttente, pushArbitrage, pushEnvoye, today,
 } from '../lib/store';
 import { lignesExport } from '../lib/export';
 
@@ -300,6 +300,7 @@ export default function Dashboard() {
       { header: 'Reporté (x jours vu)', key: 'reporte', width: 10 },
       { header: 'Splitter', key: 'splitter', width: 20 },
       { header: 'Tickets liés (même splitter)', key: 'ticketsLies', width: 12 },
+      { header: 'Envoyé le (WhatsApp)', key: 'envoye', width: 16 },
       { header: 'Historique', key: 'historique', width: 50 },
     ];
     ws.columns = colonnes;
@@ -382,6 +383,10 @@ export default function Dashboard() {
     const msg = buildTechMessage(techName, jobsChoisis, dateStr);
     window.open(waLink(tech.phone, msg), '_blank');
     setWaCompose(null);
+    const refs = jobsChoisis.flatMap((j) => j.tickets.map((t) => t.ref));
+    const maintenant = new Date().toISOString();
+    setTickets((prev) => prev.map((t) => (refs.includes(t.ref) ? { ...t, envoye_le: maintenant } : t)));
+    pushEnvoye(db, refs).catch(() => {});
   }
 
   function sendChef(chef) {
@@ -395,6 +400,10 @@ export default function Dashboard() {
     if (!Object.keys(filled).length) { alert(`Aucune intervention restante pour les équipes de ${chef.name}.`); return; }
     const msg = buildChefMessage(filled, dateStr, perTech.unassignedTickets.length, chef.name);
     window.open(waLink(chef.phone, msg), '_blank');
+    const refs = Object.values(filled).flat().flatMap((j) => j.tickets.map((t) => t.ref));
+    const maintenant = new Date().toISOString();
+    setTickets((prev) => prev.map((t) => (refs.includes(t.ref) ? { ...t, envoye_le: maintenant } : t)));
+    pushEnvoye(db, refs).catch(() => {});
   }
 
   // ── Rendu ─────────────────────────────────────────────────
@@ -740,6 +749,11 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, notes, onS
   const rc = retardClass(worst);
   const isSpl = job.type === 'splitter';
   const rep = Math.max(0, ...job.tickets.map((t) => reports[t.ref] || 0));
+  const envoyeLe = job.tickets
+    .map((t) => t.envoye_le)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
   const [motifPour, setMotifPour] = useState(null);
   const [texteAutre, setTexteAutre] = useState('');
   const [voirHistorique, setVoirHistorique] = useState(false);
@@ -776,6 +790,11 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, notes, onS
             {rep > 0 && <span style={S.repBadge}>↻ reporté ×{rep}</span>}
           </div>
           <div style={{ fontSize: 12, color: rc.color, fontWeight: 600 }}>{rc.label}</div>
+          {envoyeLe && (
+            <div style={{ fontSize: 11, color: '#8892A4' }}>
+              📤 Envoyé le {new Date(envoyeLe).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+            </div>
+          )}
           {!isSpl && (
             <div style={{ fontSize: 12, color: '#556', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {job.tickets[0].client} · {job.tickets[0].famille}

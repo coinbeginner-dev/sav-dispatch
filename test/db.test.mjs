@@ -4,7 +4,7 @@ import { PGlite } from '@electric-sql/pglite';
 import assert from 'node:assert/strict';
 import {
   useSqlClient, getSettings, saveSettings, saveUpload, getDay, assignTickets, getHistory,
-  setStatut, getAvancement, getEcarts, planifier, arbitrer, getHistoriqueTickets,
+  setStatut, getAvancement, getEcarts, planifier, arbitrer, getHistoriqueTickets, marquerEnvoye,
 } from '../lib/db.js';
 import { DEFAULT_TECHS, DEFAULT_ZONES, DEFAULT_CHEFS, buildJobs } from '../lib/dispatch.js';
 
@@ -390,6 +390,25 @@ const jobSplitter = buildJobs(parEquipeHamid).find((j) => j.type === 'splitter')
 assert.ok(jobSplitter, 'les deux tickets sont bien fusionnes en un seul job splitter cote client');
 assert.equal(jobSplitter.tickets.length, 2);
 ok('cote client, buildJobs fusionne desormais les deux tickets du splitter dans la meme colonne technicien');
+
+console.log('\n── Date du dernier envoi WhatsApp ──');
+await saveUpload('2026-12-01', [T('R950', 'MNOC-TAOUZAR', 1.0), T('R951', 'MNOC-TAOUZAR', 1.0)]);
+const avantEnvoi = await getDay('2026-12-01');
+assert.equal(avantEnvoi.tickets.find((t) => t.ref === 'R950').envoye_le, null, 'jamais envoye -> pas de date');
+
+await marquerEnvoye(['R950']);
+const apresEnvoi = await getDay('2026-12-01');
+const r950 = apresEnvoi.tickets.find((t) => t.ref === 'R950');
+const r951 = apresEnvoi.tickets.find((t) => t.ref === 'R951');
+assert.ok(r950.envoye_le, 'la date d envoi est enregistree apres marquerEnvoye');
+assert.equal(r951.envoye_le, null, 'un ticket non inclus dans l envoi ne recoit pas de date');
+
+// Un rechargement du fichier le lendemain ne doit pas effacer la date d'envoi
+// (elle vit sur le ticket canonique, pas sur le jour).
+await saveUpload('2026-12-02', [T('R950', 'MNOC-TAOUZAR', 2.0)]);
+const lendemain = await getDay('2026-12-02');
+assert.ok(lendemain.tickets.find((t) => t.ref === 'R950').envoye_le, "la date d'envoi survit a un rechargement du fichier");
+ok("marquerEnvoye enregistre la derniere date d'envoi par ticket, conservee a travers les rechargements");
 
 await pg.close();
 console.log(`\n✅ ${pass} groupes de vérifications passés — la couche base est saine.\n`);

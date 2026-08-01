@@ -61,6 +61,13 @@ assert.equal(clos.cle, 'clos');
 assert.notEqual(statutCouleur(T(), { statut: 'clos' }), 'fait', 'clos ne doit jamais se confondre avec fait dans la couleur');
 ok('statut Clos avec motif : distinct de Fait, couleur propre');
 
+console.log('\n── Date du dernier envoi WhatsApp ──');
+const jamaisEnvoye = ligneExport(T(), ctx());
+assert.equal(jamaisEnvoye.envoye, '', 'jamais envoye -> cellule vide');
+const dejaEnvoye = ligneExport(T({ envoye_le: '2026-07-31T14:30:00Z' }), ctx());
+assert.notEqual(dejaEnvoye.envoye, '', 'date d\'envoi formatee et non vide');
+ok('la colonne Envoyé le reflète la dernière date d\'envoi WhatsApp du ticket');
+
 console.log('\n── Plusieurs tickets ──');
 const lignes = lignesExport(
   [T({ ref: 'R1', delai: 3 }), T({ ref: 'R2', hors_dispatch: true })],
