@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   hasDb, getDay, saveUpload, assignTickets, setStatut, getAvancement, arbitrer,
-  getDernierJourAvecTickets, marquerEnvoye, rechercheGlobale, rouvrirTicket,
+  getDernierJourAvecTickets, marquerEnvoye, rechercheGlobale, rouvrirTicket, updateContact,
 } from '../../../lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -69,6 +69,9 @@ export async function PATCH(req) {
     }
     if ('reouvrir' in body) {
       return NextResponse.json(await rouvrirTicket(body.refs, day));
+    }
+    if ('contact' in body) {
+      return NextResponse.json(await updateContact(body.refs, body.contact));
     }
     if ('statut' in body) {
       const r = await setStatut(body.refs, body.statut, {

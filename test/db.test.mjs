@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   useSqlClient, getSettings, saveSettings, saveUpload, getDay, assignTickets, getHistory,
   setStatut, getAvancement, getEcarts, planifier, arbitrer, getHistoriqueTickets, marquerEnvoye,
-  rechercheGlobale, rouvrirTicket,
+  rechercheGlobale, rouvrirTicket, updateContact,
 } from '../lib/db.js';
 import { DEFAULT_TECHS, DEFAULT_ZONES, DEFAULT_CHEFS, buildJobs } from '../lib/dispatch.js';
 
@@ -438,6 +438,24 @@ assert.equal(r960.hors_dispatch, false);
 const histApresReouverture = await getHistoriqueTickets(['R960']);
 assert.equal(histApresReouverture.R960[0].statut, 'reouvert', 'la reouverture est tracee dans l historique');
 ok('rouvrirTicket remet un ticket clos dans le dispatch actif du jour affiche, sans attendre un futur fichier');
+
+console.log('\n── Correction manuelle du contact (survit au reimport) ──');
+await saveUpload('2026-12-15', [T('R970', 'MNOC-TAOUZAR', 1.0, { contact: '0600000000' })]);
+await updateContact(['R970'], '0611111111');
+const apresCorrection = await getDay('2026-12-15');
+const r970 = apresCorrection.tickets.find((t) => t.ref === 'R970');
+assert.equal(r970.contact, '0611111111');
+assert.equal(r970.contact_manual, true);
+ok('updateContact corrige le numero et le marque comme corrige a la main');
+
+// Le fichier du lendemain arrive encore avec l ANCIEN numero errone cote IAM
+// -> la correction manuelle ne doit pas etre ecrasee.
+await saveUpload('2026-12-16', [T('R970', 'MNOC-TAOUZAR', 2.0, { contact: '0600000000' })]);
+const lendemainCorrection = await getDay('2026-12-16');
+const r970b = lendemainCorrection.tickets.find((t) => t.ref === 'R970');
+assert.equal(r970b.contact, '0611111111', 'le numero corrige survit au reimport, meme si IAM renvoie encore l ancien');
+assert.equal(r970b.contact_manual, true);
+ok('la correction manuelle du contact resiste a un reimport du fichier, comme la reaffectation manuelle');
 
 await pg.close();
 console.log(`\n✅ ${pass} groupes de vérifications passés — la couche base est saine.\n`);

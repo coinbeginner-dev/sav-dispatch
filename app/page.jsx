@@ -8,7 +8,7 @@ import {
 import {
   loadInitial, saveSettings, pushUpload, pushAssign, loadHistory,
   pushStatut, flushStatuts, statutsEnAttente, pushArbitrage, pushEnvoye,
-  rechercheGlobale, pushReouvrir, today,
+  rechercheGlobale, pushReouvrir, pushContact, today,
 } from '../lib/store';
 import { lignesExport } from '../lib/export';
 
@@ -392,6 +392,19 @@ export default function Dashboard() {
     }
   }
 
+  // Corrige le numéro de contact (ex : IAM en donne un nouveau après un
+  // blocage "injoignable") — pour que le technicien reçoive le bon numéro
+  // dans le prochain message WhatsApp, pas l'ancien.
+  function modifierContact(ref, contactActuel) {
+    const nouveau = window.prompt(`Nouveau numéro de contact pour ${ref} :`, contactActuel || '');
+    if (nouveau == null) return; // annulé
+    const val = nouveau.trim();
+    if (!val || val === contactActuel) return;
+    setTickets(tickets.map((t) => (t.ref === ref ? { ...t, contact: val, contact_manual: true } : t)));
+    setRechercheGlobaleResultats((prev) => prev && prev.map((r) => (r.ref === ref ? { ...r, contact: val, contact_manual: true } : r)));
+    pushContact(db, [ref], val).catch((e) => alert(`Contact non enregistré : ${e.message}. Rafraîchis la page.`));
+  }
+
   // ── WhatsApp ──────────────────────────────────────────────
   // Un ticket marqué "Fait" ou "Clos" n'a plus rien à faire sur le terrain :
   // on ne le renvoie pas dans les messages, sinon l'équipe reçoit des
@@ -554,7 +567,8 @@ export default function Dashboard() {
             <div style={{ fontSize: 13, color: '#8892A4' }}>Aucun ticket ne correspond à "{recherche}".</div>
           )}
           {rechercheGlobaleResultats.map((r) => (
-            <RechercheRow key={r.ref} r={r} onReouvrir={() => reouvrirTicket(r.ref)} />
+            <RechercheRow key={r.ref} r={r} onReouvrir={() => reouvrirTicket(r.ref)}
+              onModifierContact={modifierContact} />
           ))}
         </section>
       )}
@@ -597,7 +611,8 @@ export default function Dashboard() {
             <JobRow key={job.key} job={job} techs={activeTechs} current="" onChange={(v) => reassignJob(job, v)}
               reports={reports} db={db} statut={statuts[job.tickets[0].ref]}
               notes={historique[job.tickets[0].ref]}
-              onStatut={(s, m, t) => marquerStatut(job, s, m, t)} />
+              onStatut={(s, m, t) => marquerStatut(job, s, m, t)}
+              onModifierContact={modifierContact} />
           ))}
         </section>
       )}
@@ -612,7 +627,8 @@ export default function Dashboard() {
               return (
                 <TechColumn key={tech.name} tech={tech} jobs={jobs} statuts={statuts} historique={historique}
                   reports={reports} techs={activeTechs} db={db} maxLoad={maxLoad} filtre={rechercheNorm}
-                  onChange={reassignJob} onStatut={marquerStatut} onSend={() => ouvrirEnvoiTech(tech.name)} />
+                  onChange={reassignJob} onStatut={marquerStatut} onSend={() => ouvrirEnvoiTech(tech.name)}
+                  onModifierContact={modifierContact} />
               );
             })}
           </section>
@@ -695,7 +711,7 @@ function SousStat({ n, l, c }) {
 // mélangées aux tickets encore à faire, elles faussaient la lecture visuelle
 // et le calcul du "reste à faire" par équipe. Elles passent dans un tiroir
 // replié en bas de colonne, consultable sans polluer la vue de travail.
-function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLoad, filtre, onChange, onStatut, onSend }) {
+function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLoad, filtre, onChange, onStatut, onSend, onModifierContact }) {
   const [voirFaits, setVoirFaits] = useState(false);
 
   const todo = [];
@@ -776,7 +792,8 @@ function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLo
             onChange={(v) => onChange(job, v)} reports={reports}
             db={db} statut={statuts[job.tickets[0].ref]}
             notes={historique[job.tickets[0].ref]}
-            onStatut={(s, m, t) => onStatut(job, s, m, t)} />
+            onStatut={(s, m, t) => onStatut(job, s, m, t)}
+            onModifierContact={onModifierContact} />
         ))}
         {doneAffiches.length > 0 && (
           <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #D7DCE5' }}>
@@ -790,7 +807,8 @@ function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLo
                 onChange={(v) => onChange(job, v)} reports={reports}
                 db={db} statut={statuts[job.tickets[0].ref]}
                 notes={historique[job.tickets[0].ref]}
-                onStatut={(s, m, t) => onStatut(job, s, m, t)} />
+                onStatut={(s, m, t) => onStatut(job, s, m, t)}
+                onModifierContact={onModifierContact} />
             ))}
           </div>
         )}
@@ -799,7 +817,7 @@ function TechColumn({ tech, jobs, statuts, historique, reports, techs, db, maxLo
   );
 }
 
-function JobRow({ job, techs, current, onChange, reports, db, statut, notes, onStatut }) {
+function JobRow({ job, techs, current, onChange, reports, db, statut, notes, onStatut, onModifierContact }) {
   const worst = Math.max(...job.tickets.map((t) => t.delai));
   const rc = retardClass(worst);
   const isSpl = job.type === 'splitter';
@@ -853,6 +871,13 @@ function JobRow({ job, techs, current, onChange, reports, db, statut, notes, onS
           {!isSpl && (
             <div style={{ fontSize: 12, color: '#556', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {job.tickets[0].client} · {job.tickets[0].famille}
+            </div>
+          )}
+          {!isSpl && onModifierContact && (
+            <div style={{ fontSize: 11, color: '#8892A4' }}>
+              📞 {job.tickets[0].contact || '—'}{job.tickets[0].contact_manual ? ' (corrigé)' : ''}
+              <button style={{ ...S.btnLink, marginLeft: 6 }}
+                onClick={() => onModifierContact(job.tickets[0].ref, job.tickets[0].contact)}>✎ modifier</button>
             </div>
           )}
           {isSpl && (
@@ -1061,7 +1086,7 @@ function ArbitrageRow({ job, techs, current, onChange, onArbitrer }) {
 // Une ligne de résultat de la recherche globale (toute la base, pas
 // seulement le jour affiché) : dernier statut connu, historique complet,
 // et bouton pour réouvrir le ticket dans le dispatch actif.
-function RechercheRow({ r, onReouvrir }) {
+function RechercheRow({ r, onReouvrir, onModifierContact }) {
   const [voirHistorique, setVoirHistorique] = useState(false);
   const d = r.dernierStatut;
   return (
@@ -1075,6 +1100,10 @@ function RechercheRow({ r, onReouvrir }) {
           <div style={{ fontSize: 12, color: '#556' }}>{r.client} · {r.msan}</div>
           <div style={{ fontSize: 11, color: '#8892A4' }}>
             équipe : {r.assigned_tech || '— non affecté —'} · vu {r.days_seen}× · dernier fichier le {r.last_seen}
+          </div>
+          <div style={{ fontSize: 11, color: '#8892A4' }}>
+            📞 {r.contact || '—'}{r.contact_manual ? ' (corrigé)' : ''}
+            <button style={{ ...S.btnLink, marginLeft: 6 }} onClick={() => onModifierContact(r.ref, r.contact)}>✎ modifier</button>
           </div>
           {d && (
             <div style={{ fontSize: 12, color: '#0070C0', fontWeight: 600, marginTop: 2 }}>
