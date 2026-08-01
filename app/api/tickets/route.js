@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   hasDb, getDay, saveUpload, assignTickets, setStatut, getAvancement, arbitrer,
-  getDernierJourAvecTickets, marquerEnvoye,
+  getDernierJourAvecTickets, marquerEnvoye, rechercheGlobale, rouvrirTicket,
 } from '../../../lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -18,7 +18,12 @@ function today() {
 export async function GET(req) {
   if (!hasDb()) return NextResponse.json({ db: false });
   try {
-    const demande = new URL(req.url).searchParams.get('day') || today();
+    const url = new URL(req.url);
+    const terme = url.searchParams.get('recherche');
+    if (terme) {
+      return NextResponse.json({ db: true, resultats: await rechercheGlobale(terme) });
+    }
+    const demande = url.searchParams.get('day') || today();
     let jour = demande;
     let resultat = await getDay(jour);
     let reporte = false;
@@ -61,6 +66,9 @@ export async function PATCH(req) {
     }
     if ('envoye' in body) {
       return NextResponse.json(await marquerEnvoye(body.refs));
+    }
+    if ('reouvrir' in body) {
+      return NextResponse.json(await rouvrirTicket(body.refs, day));
     }
     if ('statut' in body) {
       const r = await setStatut(body.refs, body.statut, {

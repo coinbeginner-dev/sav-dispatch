@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
   useSqlClient, getSettings, saveSettings, saveUpload, getDay, assignTickets, getHistory,
   setStatut, getAvancement, getEcarts, planifier, arbitrer, getHistoriqueTickets, marquerEnvoye,
+  rechercheGlobale, rouvrirTicket,
 } from '../lib/db.js';
 import { DEFAULT_TECHS, DEFAULT_ZONES, DEFAULT_CHEFS, buildJobs } from '../lib/dispatch.js';
 
@@ -409,6 +410,34 @@ await saveUpload('2026-12-02', [T('R950', 'MNOC-TAOUZAR', 2.0)]);
 const lendemain = await getDay('2026-12-02');
 assert.ok(lendemain.tickets.find((t) => t.ref === 'R950').envoye_le, "la date d'envoi survit a un rechargement du fichier");
 ok("marquerEnvoye enregistre la derniere date d'envoi par ticket, conservee a travers les rechargements");
+
+console.log('\n── Recherche globale + réouverture d\'un ticket clos ──');
+await saveUpload('2026-12-10', [T('R960', 'MNOC-TAOUZAR', 1.0, { client: 'CLIENT RECHERCHE TEST' })]);
+await setStatut(['R960'], 'fait', { day: '2026-12-10' });
+// Le ticket disparait du fichier suivant -> cloture par absence, comme un
+// ticket vraiment termine et jamais revu depuis par IAM.
+await saveUpload('2026-12-11', []);
+
+const parRef = await rechercheGlobale('R960');
+assert.equal(parRef.length, 1);
+assert.equal(parRef[0].ref, 'R960');
+assert.equal(parRef[0].dernierStatut.statut, 'fait', 'le dernier statut connu est retrouve meme si le ticket a disparu des fichiers');
+assert.ok(parRef[0].historique.length >= 1, 'historique complet expose');
+ok('rechercheGlobale retrouve un ticket par ref, avec son dernier statut et son historique, meme hors du jour affiche');
+
+const parClient = await rechercheGlobale('recherche test');
+assert.equal(parClient.length, 1, 'recherche insensible a la casse par nom de client aussi');
+ok('rechercheGlobale retrouve aussi par nom de client (insensible a la casse)');
+
+await rouvrirTicket(['R960'], '2026-12-12');
+const apresReouverture = await getDay('2026-12-12');
+const r960 = apresReouverture.tickets.find((t) => t.ref === 'R960');
+assert.ok(r960, 'le ticket reouvert apparait dans le jour affiche, meme sans nouveau fichier charge ce jour-la');
+assert.equal(r960.statut, null, 'reparti a blanc, pret pour une nouvelle action');
+assert.equal(r960.hors_dispatch, false);
+const histApresReouverture = await getHistoriqueTickets(['R960']);
+assert.equal(histApresReouverture.R960[0].statut, 'reouvert', 'la reouverture est tracee dans l historique');
+ok('rouvrirTicket remet un ticket clos dans le dispatch actif du jour affiche, sans attendre un futur fichier');
 
 await pg.close();
 console.log(`\n✅ ${pass} groupes de vérifications passés — la couche base est saine.\n`);

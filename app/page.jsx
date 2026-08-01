@@ -7,7 +7,8 @@ import {
 } from '../lib/dispatch';
 import {
   loadInitial, saveSettings, pushUpload, pushAssign, loadHistory,
-  pushStatut, flushStatuts, statutsEnAttente, pushArbitrage, pushEnvoye, today,
+  pushStatut, flushStatuts, statutsEnAttente, pushArbitrage, pushEnvoye,
+  rechercheGlobale, pushReouvrir, today,
 } from '../lib/store';
 import { lignesExport } from '../lib/export';
 
@@ -22,6 +23,8 @@ const STATUT_LABEL = {
   // anciennes valeurs encore présentes dans l'historique
   pas_acces: '🚪 Pas d\'accès',
   reporte: '⏭ Reporté',
+  // Trace laissée par une réouverture manuelle (ticket déjà clos redevenu actif).
+  reouvert: '🔓 Réouvert',
 };
 // Seul le blocage demande une cause : c'est elle qu'on voudra agréger plus tard.
 const MOTIFS = { blocage: ['GC', 'Numéro injoignable', 'Numéro incorrect', 'Autre'] };
@@ -46,6 +49,10 @@ export default function Dashboard() {
   const [db, setDb] = useState(false);
   const [busy, setBusy] = useState(false);
   const [recherche, setRecherche] = useState('');
+  // Résultats de la recherche dans TOUT l'historique (pas juste le jour
+  // affiché) — déclenchée à la main, pas à chaque frappe.
+  const [rechercheGlobaleResultats, setRechercheGlobaleResultats] = useState(null);
+  const [rechercheGlobaleEnCours, setRechercheGlobaleEnCours] = useState(false);
   // Jour réellement affiché/actionné : aujourd'hui, ou le dernier jour connu
   // si aucun fichier n'a encore été chargé aujourd'hui (voir loadInitial).
   const [jourActif, setJourActif] = useState(today());
@@ -359,6 +366,32 @@ export default function Dashboard() {
     pushAssign(db, refs, newTech, jourActif).catch((e) => alert(`Réaffectation non enregistrée : ${e.message}. Rafraîchis la page.`));
   }
 
+  // Recherche dans tout l'historique (pas juste le jour affiché) — pour
+  // retrouver un ticket déjà clôturé, par exemple quand IAM le renvoie pour
+  // correction alors qu'on l'avait déjà marqué traité.
+  async function lancerRechercheGlobale() {
+    if (!recherche.trim()) { setRechercheGlobaleResultats(null); return; }
+    setRechercheGlobaleEnCours(true);
+    try {
+      setRechercheGlobaleResultats(await rechercheGlobale(db, recherche));
+    } finally {
+      setRechercheGlobaleEnCours(false);
+    }
+  }
+
+  // Remet un ticket déjà clos/fait dans le dispatch actif du jour affiché.
+  async function reouvrirTicket(ref) {
+    if (!confirm(`Réouvrir ${ref} ? Il redevient actif dans le dispatch d'aujourd'hui, prêt à être réaffecté.`)) return;
+    try {
+      await pushReouvrir(db, [ref], jourActif);
+      setRechercheGlobaleResultats(null);
+      await rafraichir();
+      alert(`${ref} réouvert — il apparaît maintenant dans "Non affectés" ou chez sa dernière équipe.`);
+    } catch (e) {
+      alert(`Réouverture impossible : ${e.message}`);
+    }
+  }
+
   // ── WhatsApp ──────────────────────────────────────────────
   // Un ticket marqué "Fait" ou "Clos" n'a plus rien à faire sur le terrain :
   // on ne le renvoie pas dans les messages, sinon l'équipe reçoit des
@@ -487,14 +520,18 @@ export default function Dashboard() {
               style={{ ...S.inputSm, minWidth: 260 }}
               placeholder="🔍 Chercher un n° de ticket ou un client — pour savoir chez quelle équipe il se trouve"
               value={recherche}
-              onChange={(e) => setRecherche(e.target.value)}
+              onChange={(e) => { setRecherche(e.target.value); setRechercheGlobaleResultats(null); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') lancerRechercheGlobale(); }}
             />
             {recherche.trim() && (
               <>
                 <span style={{ fontSize: 12, color: '#8892A4' }}>
-                  {resultatsRecherche.length} résultat{resultatsRecherche.length > 1 ? 's' : ''}
+                  {resultatsRecherche.length} résultat{resultatsRecherche.length > 1 ? 's' : ''} aujourd'hui
                 </span>
-                <button style={S.btnLink} onClick={() => setRecherche('')}>effacer</button>
+                <button style={S.btnGhost} onClick={lancerRechercheGlobale} disabled={rechercheGlobaleEnCours}>
+                  {rechercheGlobaleEnCours ? '⏳ Recherche…' : '🔎 Chercher dans tout l\'historique'}
+                </button>
+                <button style={S.btnLink} onClick={() => { setRecherche(''); setRechercheGlobaleResultats(null); }}>effacer</button>
               </>
             )}
             <button style={{ ...S.btnAdd, marginLeft: 'auto' }} onClick={exporterExcel}>
@@ -503,6 +540,24 @@ export default function Dashboard() {
           </div>
         )}
       </section>
+
+      {rechercheGlobaleResultats !== null && (
+        <section style={{ ...S.card, borderLeft: '4px solid #0070C0' }}>
+          <h3 style={{ ...S.h3, color: '#0070C0' }}>
+            🔎 Historique complet — {rechercheGlobaleResultats.length} ticket{rechercheGlobaleResultats.length > 1 ? 's' : ''} trouvé{rechercheGlobaleResultats.length > 1 ? 's' : ''}
+          </h3>
+          <p style={S.hint}>
+            Recherche dans TOUTE la base, pas seulement le jour affiché — utile pour retrouver un ticket
+            déjà clôturé (ex : IAM le renvoie pour correction). Clique "Réouvrir" pour le remettre dans le dispatch actif.
+          </p>
+          {rechercheGlobaleResultats.length === 0 && (
+            <div style={{ fontSize: 13, color: '#8892A4' }}>Aucun ticket ne correspond à "{recherche}".</div>
+          )}
+          {rechercheGlobaleResultats.map((r) => (
+            <RechercheRow key={r.ref} r={r} onReouvrir={() => reouvrirTicket(r.ref)} />
+          ))}
+        </section>
+      )}
 
       {/* Arbitrage du matin : tickets déjà renseignés un jour précédent */}
       {aArbitrer.length > 0 && (
@@ -999,6 +1054,58 @@ function ArbitrageRow({ job, techs, current, onChange, onArbitrer }) {
             }}>🚫 Clos</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Une ligne de résultat de la recherche globale (toute la base, pas
+// seulement le jour affiché) : dernier statut connu, historique complet,
+// et bouton pour réouvrir le ticket dans le dispatch actif.
+function RechercheRow({ r, onReouvrir }) {
+  const [voirHistorique, setVoirHistorique] = useState(false);
+  const d = r.dernierStatut;
+  return (
+    <div style={{ ...S.job, background: '#F5F7FA' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: '#0F1B3D' }}>
+            {r.ref}
+            {r.status === 'clos' && <span style={{ ...S.repBadge, background: '#EAFAF1', color: '#00753A' }}>clos</span>}
+          </div>
+          <div style={{ fontSize: 12, color: '#556' }}>{r.client} · {r.msan}</div>
+          <div style={{ fontSize: 11, color: '#8892A4' }}>
+            équipe : {r.assigned_tech || '— non affecté —'} · vu {r.days_seen}× · dernier fichier le {r.last_seen}
+          </div>
+          {d && (
+            <div style={{ fontSize: 12, color: '#0070C0', fontWeight: 600, marginTop: 2 }}>
+              Dernier statut : {STATUT_LABEL[d.statut] || d.statut} le {d.day.split('-').reverse().join('/')}
+              {d.motif ? ` · ${d.motif}` : ''}
+              {d.texte ? ` « ${d.texte} »` : ''}
+            </div>
+          )}
+        </div>
+        <button style={S.btnSave} onClick={onReouvrir}>🔓 Réouvrir</button>
+      </div>
+      {r.historique?.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <button style={S.btnLink} onClick={() => setVoirHistorique(!voirHistorique)}>
+            {voirHistorique ? 'masquer' : `historique (${r.historique.length})`}
+          </button>
+          {voirHistorique && (
+            <div style={S.historiqueBox}>
+              {r.historique.map((n, i) => (
+                <div key={i} style={S.historiqueLigne}>
+                  <span style={{ color: '#8892A4' }}>{n.le}</span>{' '}
+                  <strong>{STATUT_LABEL[n.statut] || n.statut}</strong>
+                  {n.motif && <span> · {n.motif}</span>}
+                  {n.texte && <span> « {n.texte} »</span>}
+                  {n.source && n.source !== 'chef' && <span style={{ color: '#8892A4' }}> ({n.source})</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
