@@ -37,6 +37,11 @@ export default function Dashboard() {
   const [assign, setAssign] = useState({});
   const [errors, setErrors] = useState([]);
   const [fileName, setFileName] = useState('');
+  // Décoché par défaut : un upload n'est JAMAIS destructeur. Ne cocher que
+  // si ce fichier représente vraiment la totalité du reste à faire, pour
+  // clôturer les tickets absents — sinon un envoi partiel (juste les
+  // nouveaux tickets du jour, par ex.) ne doit toucher à rien d'autre.
+  const [clotureComplete, setClotureComplete] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   // Nom du technicien en cours de composition d'un envoi WhatsApp (sélection
@@ -159,7 +164,7 @@ export default function Dashboard() {
 
     setBusy(true);
     try {
-      const res = await pushUpload(db, parsed, zones, techs);
+      const res = await pushUpload(db, parsed, zones, techs, clotureComplete);
       setTickets(res.tickets);
       setAssign(res.assign);
       setReports(res.reports);
@@ -167,6 +172,9 @@ export default function Dashboard() {
       // précédent n'a plus lieu d'être, tout se joue désormais sur aujourd'hui.
       setJourActif(today());
       setReporte(false);
+      // La case se décoche après usage : c'est une décision à reprendre à
+      // chaque fois, pas un réglage qui reste actif par erreur la fois suivante.
+      setClotureComplete(false);
       if (res.closed) {
         setErrors([...errs, `${res.closed} ticket(s) absent(s) du fichier → marqué(s) traité(s)`]);
       }
@@ -498,6 +506,11 @@ export default function Dashboard() {
           {fileName && <span style={{ fontSize: 13, color: '#556' }}>{fileName} — {tickets.length} tickets</span>}
           {errors.map((e, i) => <span key={i} style={S.warn}>⚠ {e}</span>)}
         </div>
+        <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: '#556', marginTop: 8 }}>
+          <input type="checkbox" checked={clotureComplete} onChange={(e) => setClotureComplete(e.target.checked)} />
+          Ce fichier est la liste <strong>complète</strong> du reste à faire — clôturer les tickets absents
+          <span style={{ color: '#8892A4' }}>(laisse décoché pour un simple ajout : rien d'autre ne sera touché)</span>
+        </label>
 
         {tickets.length > 0 && (
           <>

@@ -107,7 +107,7 @@ const d2 = await saveUpload('2026-07-21', [
   T('R001', 'MNOC-TAOUZAR', 4.2),
   T('R003', 'MSAN-INCONNU', 1.5),
   T('R005', 'GA-C-COLLINE-1', 0.3),
-]);
+], { clore: true });
 assert.equal(d2.tickets.length, 3, 'seuls les tickets du jour sont renvoyés');
 assert.equal(d2.reports.R001, 1, 'R001 déjà vu 1 jour avant');
 assert.equal(d2.reports.R003, 1);
@@ -148,7 +148,8 @@ console.log('\n── Historique ──');
 const h = await getHistory();
 assert.equal(h.days.length, 4, '4 journées enregistrées');
 assert.equal(h.days[0].day, '2026-07-23', 'tri du plus récent au plus ancien');
-assert.equal(h.days[0].total, 2);
+assert.equal(h.days[0].total, 4,
+  'R001/R009 du fichier + R003/R005 reconduits tels quels (encore ouverts, absents du fichier, clore=false)');
 assert.equal(h.totaux.total, 6, 'R001..R005 + R009');
 const r001 = h.vieux.find((t) => t.ref === 'R001');
 assert.equal(r001.days_seen, 4, 'R001 présent 4 jours');
@@ -156,12 +157,19 @@ assert.ok(h.totaux.clos >= 2, 'tickets clos comptés');
 ok('historique jour par jour + tickets qui traînent');
 
 console.log('\n── Cas limites ──');
-const dEmpty = await saveUpload('2026-07-24', []);
+const dEmpty = await saveUpload('2026-07-24', [], { clore: true });
 assert.equal(dEmpty.tickets.length, 0, 'fichier vide accepté');
-assert.equal(dEmpty.closed, 2, 'les tickets de la veille sont clôturés');
+assert.equal(dEmpty.closed, 4,
+  'clore=true clôture tous les tickets encore ouverts et absents (R001/R009 du jour 4, plus R003/R005 ' +
+  'restés ouverts depuis les jours 3-4 car ces uploads-là n\'avaient pas clore=true)');
 const reOpen = await saveUpload('2026-07-25', [T('R001', 'MNOC-TAOUZAR', 8.0)]);
 assert.equal(reOpen.tickets[0].status, 'ouvert', 'un ticket qui revient est rouvert');
 ok('fichier vide et réouverture d\'un ticket clos');
+
+// Termine proprement R001 pour cette section : sans ça, avec clore=false
+// par défaut, il se reconduirait indéfiniment dans toutes les sections
+// suivantes (comme tout ticket toujours ouvert et jamais réellement clôturé).
+await setStatut(['R001'], 'fait', { day: '2026-07-25' });
 
 console.log('\n── Statuts terrain ──');
 await saveSettings({
@@ -213,6 +221,10 @@ assert.equal(ecarts.length, 1, 'un seul écart détecté');
 assert.equal(ecarts[0].ref, 'R100', 'déclaré fait la veille mais toujours présent');
 ok('écart déclaratif / fichier : intervention faite mais non clôturée côté IAM');
 
+// Nettoyage de fin de section : sans clore=true ici, R100/R200/R300 (encore
+// ouverts) se reconduiraient indéfiniment dans toutes les sections suivantes,
+// sans rapport avec ce qu'elles testent.
+await saveUpload('2026-08-03', [], { clore: true });
 
 console.log('\n── Arbitrage du matin ──');
 await saveSettings({
@@ -293,8 +305,14 @@ console.log('\n── Clôture depuis l\'arbitrage ──');
 await saveUpload('2026-09-04', [T('R600', 'MNOC-TAOUZAR', 1.0), T('R601', 'MNOC-TAOUZAR', 1.0)]);
 await setStatut(['R600'], 'reporte', { day: '2026-09-04', motif: 'POC a changer' });
 await setStatut(['R601'], 'planifie', { day: '2026-09-04' });
+// R200/R501 (jamais tranchés) restent eux aussi "hors dispatch / à arbitrer"
+// en arrière-plan, reconduits jour après jour comme le veut le nouveau
+// comportement par défaut (clore=false) — on scope donc les vérifications
+// suivantes aux refs du jour pour ne pas dépendre de ce bruit de fond.
+const nouveaux = new Set(['R600', 'R601']);
 const arbJ = await saveUpload('2026-09-05', [T('R600', 'MNOC-TAOUZAR', 2.0), T('R601', 'MNOC-TAOUZAR', 2.0)]);
-assert.equal(arbJ.tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide).length, 2, 'les 2 sont encore en cours -> arrivent en arbitrage');
+assert.equal(arbJ.tickets.filter((t) => nouveaux.has(t.ref) && t.hors_dispatch && !t.arbitrage_decide).length, 2,
+  'les 2 sont encore en cours -> arrivent en arbitrage');
 
 await arbitrer(['R600'], '2026-09-05', 'cloturer', 'Doublon avec R599');
 const apresClot = await getDay('2026-09-05');
@@ -304,7 +322,7 @@ assert.equal(r600.arbitrage_decide, true, "cloture : sort de la liste d'arbitrag
 assert.equal(apresClot.statuts.R600.statut, 'clos', 'cloture depuis l arbitrage -> clos, pas fait (distinct d une intervention reellement terminee)');
 assert.equal(apresClot.statuts.R600.source, 'orienteur', 'la decision est tracee comme venant de l orienteur');
 assert.equal(apresClot.statuts.R600.motif, 'Doublon avec R599', 'le motif fourni par l orienteur prime');
-const restants = apresClot.tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide);
+const restants = apresClot.tickets.filter((t) => nouveaux.has(t.ref) && t.hors_dispatch && !t.arbitrage_decide);
 assert.equal(restants.length, 1, 'seul R601 reste a arbitrer');
 assert.equal(restants[0].ref, 'R601');
 ok('cloture depuis l arbitrage : hors dispatch, acte clos avec motif, sorti de la liste');
@@ -314,9 +332,10 @@ const apresPlan = await getDay('2026-09-05');
 const r601 = apresPlan.tickets.find((t) => t.ref === 'R601');
 assert.equal(r601.hors_dispatch, false, 'planifie : revient en dispatch');
 assert.equal(r601.statut, 'planifie', 'le dernier statut connu (planifie) est repris, pas remis a blanc');
-assert.equal(apresPlan.tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide).length, 0, 'liste d arbitrage videe');
+assert.equal(apresPlan.tickets.filter((t) => nouveaux.has(t.ref) && t.hors_dispatch && !t.arbitrage_decide).length, 0,
+  'liste d arbitrage videe (parmi R600/R601)');
 const rechargeApres = await saveUpload('2026-09-05', [T('R600', 'MNOC-TAOUZAR', 2.0), T('R601', 'MNOC-TAOUZAR', 2.0)]);
-assert.equal(rechargeApres.tickets.filter((t) => t.hors_dispatch && !t.arbitrage_decide).length, 0,
+assert.equal(rechargeApres.tickets.filter((t) => nouveaux.has(t.ref) && t.hors_dispatch && !t.arbitrage_decide).length, 0,
   'un rechargement ne fait pas revenir ce qui a ete arbitre');
 ok('les deux decisions vident la liste et survivent au rechargement');
 
@@ -329,6 +348,10 @@ assert.equal(r600Lendemain.arbitrage_decide, true, 'clos -> aucune decision a re
 assert.equal(r600Lendemain.statut, 'clos', 'le statut clos est repris tel quel, pas transforme en fait');
 assert.equal(r600Lendemain.motif, 'Doublon avec R599', 'le motif de cloture suit');
 ok('un ticket clos avec motif se reconduit tout seul, comme un fait, sans repasser par l arbitrage');
+
+// Nettoyage de fin de section : R500/R501/R601 (encore ouverts, jamais
+// terminés côté tickets.status) ne doivent pas polluer les sections suivantes.
+await saveUpload('2026-09-07', [], { clore: true });
 
 console.log('\n── Nouveau vocabulaire (fait / planifie / blocage) + historique ──');
 await saveUpload('2026-10-01', [T('R700', 'MNOC-TAOUZAR', 1.5)]);
@@ -416,7 +439,7 @@ await saveUpload('2026-12-10', [T('R960', 'MNOC-TAOUZAR', 1.0, { client: 'CLIENT
 await setStatut(['R960'], 'fait', { day: '2026-12-10' });
 // Le ticket disparait du fichier suivant -> cloture par absence, comme un
 // ticket vraiment termine et jamais revu depuis par IAM.
-await saveUpload('2026-12-11', []);
+await saveUpload('2026-12-11', [], { clore: true });
 
 const parRef = await rechercheGlobale('R960');
 assert.equal(parRef.length, 1);
@@ -456,6 +479,36 @@ const r970b = lendemainCorrection.tickets.find((t) => t.ref === 'R970');
 assert.equal(r970b.contact, '0611111111', 'le numero corrige survit au reimport, meme si IAM renvoie encore l ancien');
 assert.equal(r970b.contact_manual, true);
 ok('la correction manuelle du contact resiste a un reimport du fichier, comme la reaffectation manuelle');
+
+// Nettoyage : tout ce qui traîne encore ouvert depuis les sections précédentes
+// (R900/R901/R950/R951/R970...) ne doit pas polluer les compteurs de clôture
+// de la section suivante, dédiée spécifiquement à clore=false/true.
+await saveUpload('2026-12-17', [], { clore: true });
+
+console.log('\n── Upload partiel (clore=false par défaut) : rien n\'est clôturé par absence ──');
+await saveUpload('2027-01-01', [
+  T('R980', 'MNOC-TAOUZAR', 1.0), T('R981', 'GA-C-COLLINE-1', 1.0),
+]);
+await assignTickets(['R980'], 'RACHID', '2027-01-01');
+await updateContact(['R981'], '0699999999');
+
+// Fichier du lendemain : seulement R981, comme un extrait partiel (ex : les
+// nouveaux tickets du jour seuls). R980 est absent mais NE DOIT PAS être clos.
+const dPartiel = await saveUpload('2027-01-02', [T('R981', 'GA-C-COLLINE-1', 2.0)]);
+assert.equal(dPartiel.closed, 0, 'sans clore=true (défaut), un ticket absent reste ouvert');
+const j2701 = await getDay('2027-01-02');
+assert.ok(j2701.tickets.find((t) => t.ref === 'R980'), 'R980 continue d\'apparaitre dans le dispatch bien qu\'absent du fichier');
+assert.equal(j2701.assign.R980, 'RACHID', 'son affectation manuelle est intacte');
+const r981Partiel = j2701.tickets.find((t) => t.ref === 'R981');
+assert.equal(r981Partiel.contact, '0699999999', 'la correction de contact d\'un ticket present est aussi conservee');
+ok('un upload plus petit que la base (défaut clore=false) préserve les tickets absents, leur équipe et leurs corrections');
+
+// Avec clore=true, le comportement historique (liste complète = clôture des absents) reste disponible.
+const dComplet = await saveUpload('2027-01-03', [T('R981', 'GA-C-COLLINE-1', 3.0)], { clore: true });
+assert.equal(dComplet.closed, 1, 'clore=true explicite : R980 absent est bien clôturé');
+const j2703 = await getDay('2027-01-03');
+assert.equal(j2703.tickets.find((t) => t.ref === 'R980'), undefined, 'R980 clôturé ne revient plus dans le dispatch actif');
+ok('clore=true explicite conserve l\'ancien comportement quand le fichier est bien la liste complète du reste à faire');
 
 await pg.close();
 console.log(`\n✅ ${pass} groupes de vérifications passés — la couche base est saine.\n`);

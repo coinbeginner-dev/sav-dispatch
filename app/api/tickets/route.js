@@ -45,11 +45,11 @@ export async function GET(req) {
 export async function POST(req) {
   if (!hasDb()) return NextResponse.json({ db: false }, { status: 503 });
   try {
-    const { day, tickets } = await req.json();
+    const { day, tickets, clore } = await req.json();
     if (!Array.isArray(tickets)) {
       return NextResponse.json({ error: 'tickets manquants' }, { status: 400 });
     }
-    return NextResponse.json({ db: true, ...(await saveUpload(day || today(), tickets)) });
+    return NextResponse.json({ db: true, ...(await saveUpload(day || today(), tickets, { clore: Boolean(clore) })) });
   } catch (e) {
     return NextResponse.json({ error: String(e.message || e) }, { status: 500 });
   }
