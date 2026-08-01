@@ -116,14 +116,23 @@ export default function NaDashboard() {
     const aTraiter = total - cloture - blocage - planifie;
     const rouge = commandes.filter((c) => !c.statut && slaClass(c.date_reception).key === 'rouge').length;
     const orange = commandes.filter((c) => !c.statut && slaClass(c.date_reception).key === 'orange').length;
-    // Répartition par opérateur (IAM / Orange / INWI...), pour savoir combien
-    // de commandes viennent de chacun, tous statuts confondus.
-    const parOperateur = {};
-    for (const c of commandes) {
-      const lbl = operateurLabel(c.operateur);
-      parOperateur[lbl] = (parOperateur[lbl] || 0) + 1;
-    }
-    return { total, fait, annule, blocage, planifie, cloture, aTraiter, rouge, orange, parOperateur };
+    // Répartition par opérateur (IAM / Orange / INWI...) — pas seulement sur
+    // le total, mais pour chaque compteur (milestone) du dashboard, pour
+    // savoir combien de chaque opérateur est clôturé, planifié, à traiter...
+    const parOperateurDe = (liste) => {
+      const m = {};
+      for (const c of liste) { const lbl = operateurLabel(c.operateur); m[lbl] = (m[lbl] || 0) + 1; }
+      return m;
+    };
+    const parOperateur = parOperateurDe(commandes);
+    const parOperateurCloture = parOperateurDe(commandes.filter((c) => c.statut === 'fait' || c.statut === 'annule'));
+    const parOperateurPlanifie = parOperateurDe(commandes.filter((c) => c.statut === 'planifie'));
+    const parOperateurBlocage = parOperateurDe(commandes.filter((c) => c.statut === 'blocage'));
+    const parOperateurATraiter = parOperateurDe(commandes.filter((c) => !c.statut));
+    return {
+      total, fait, annule, blocage, planifie, cloture, aTraiter, rouge, orange,
+      parOperateur, parOperateurCloture, parOperateurPlanifie, parOperateurBlocage, parOperateurATraiter,
+    };
   }, [commandes]);
 
   const blocages = useMemo(
@@ -231,17 +240,11 @@ export default function NaDashboard() {
         {commandes.length > 0 && (
           <>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
-              <StatCard n={stats.total} l="Total" bg="#F5F7FA" c="#0F1B3D" />
-              <StatCard n={stats.cloture} l={`Clôturé (fait ${stats.fait} · annulé ${stats.annule})`} bg="#EAFAF1" c="#00753A" />
-              <StatCard n={stats.planifie} l="Planifié" bg="#EAF3FA" c="#0070C0" />
-              <StatCard n={stats.aTraiter} l="À traiter" bg="#EAF3FA" c="#0070C0" />
-              <StatCard n={stats.blocage} l="En blocage" bg="#FEF2F2" c="#C0392B" />
-            </div>
-            <div style={{ fontSize: 12, color: '#8892A4', margin: '10px 0 6px 2px' }}>par opérateur :</div>
-            <div style={S.statRow}>
-              {Object.entries(stats.parOperateur).map(([lbl, n]) => (
-                <Stat key={lbl} n={n} l={lbl} c={OPERATEUR_COLOR[lbl] || '#0F1B3D'} />
-              ))}
+              <StatCard n={stats.total} l="Total" bg="#F5F7FA" c="#0F1B3D" detail={stats.parOperateur} />
+              <StatCard n={stats.cloture} l={`Clôturé (fait ${stats.fait} · annulé ${stats.annule})`} bg="#EAFAF1" c="#00753A" detail={stats.parOperateurCloture} />
+              <StatCard n={stats.planifie} l="Planifié" bg="#EAF3FA" c="#0070C0" detail={stats.parOperateurPlanifie} />
+              <StatCard n={stats.aTraiter} l="À traiter" bg="#EAF3FA" c="#0070C0" detail={stats.parOperateurATraiter} />
+              <StatCard n={stats.blocage} l="En blocage" bg="#FEF2F2" c="#C0392B" detail={stats.parOperateurBlocage} />
             </div>
             <div style={S.statRow}>
               <Stat n={stats.rouge} l="🔴 SLA dépassé (≥48h)" c="#C0392B" />
@@ -326,11 +329,16 @@ export default function NaDashboard() {
   );
 }
 
-function StatCard({ n, l, bg, c }) {
+function StatCard({ n, l, bg, c, detail }) {
   return (
     <div style={{ background: bg, borderRadius: 10, padding: '10px 16px', minWidth: 130 }}>
       <div style={{ fontSize: 24, fontWeight: 800, color: c }}>{n}</div>
       <div style={{ fontSize: 11, color: '#556' }}>{l}</div>
+      {detail && Object.keys(detail).length > 0 && (
+        <div style={{ fontSize: 10, color: '#8892A4', marginTop: 4 }}>
+          {Object.entries(detail).map(([lbl, v]) => `${lbl} ${v}`).join(' · ')}
+        </div>
+      )}
     </div>
   );
 }
