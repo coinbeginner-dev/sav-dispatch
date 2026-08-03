@@ -8,9 +8,9 @@ import {
 import {
   loadInitial, saveSettings, pushUpload, pushAssign, loadHistory,
   pushStatut, flushStatuts, statutsEnAttente, pushArbitrage, pushEnvoye,
-  rechercheGlobale, pushReouvrir, pushContact, today,
+  rechercheGlobale, pushReouvrir, pushContact, listerTousLesTickets, today,
 } from '../lib/store';
-import { lignesExport } from '../lib/export';
+import { lignesExport, lignesExportBase } from '../lib/export';
 
 // Statuts terrain. Aujourd'hui posés par le chef ; demain par la remontée WhatsApp.
 const STATUT_LABEL = {
@@ -57,6 +57,7 @@ export default function Dashboard() {
   // Résultats de la recherche dans TOUT l'historique (pas juste le jour
   // affiché) — déclenchée à la main, pas à chaque frappe.
   const [rechercheGlobaleResultats, setRechercheGlobaleResultats] = useState(null);
+  const [exportBaseEnCours, setExportBaseEnCours] = useState(false);
   const [rechercheGlobaleEnCours, setRechercheGlobaleEnCours] = useState(false);
   // Jour réellement affiché/actionné : aujourd'hui, ou le dernier jour connu
   // si aucun fichier n'a encore été chargé aujourd'hui (voir loadInitial).
@@ -366,6 +367,79 @@ export default function Dashboard() {
     URL.revokeObjectURL(url);
   }
 
+  // Export de TOUTE la base (pas seulement le dispatch du jour affiché) :
+  // utile depuis que clore=false par défaut, un ticket encore ouvert peut ne
+  // plus apparaître dans le dispatch d'un jour donné sans avoir disparu de
+  // la base — ici on retrouve tout ce qui a été suivi, ouvert ou clôturé.
+  async function exporterBaseComplete() {
+    setExportBaseEnCours(true);
+    try {
+      const tousLesTickets = await listerTousLesTickets(db);
+      if (!tousLesTickets.length) { alert('Aucun ticket en base.'); return; }
+      const ExcelJS = (await import('exceljs')).default;
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'SAV Dispatch';
+      wb.created = new Date();
+      const ws = wb.addWorksheet('Base complète', { views: [{ state: 'frozen', ySplit: 1 }] });
+
+      const colonnes = [
+        { header: 'Ticket', key: 'ref', width: 14 },
+        { header: 'Client', key: 'client', width: 30 },
+        { header: 'Contact', key: 'contact', width: 20 },
+        { header: 'MSAN', key: 'msan', width: 24 },
+        { header: 'Équipe', key: 'equipe', width: 18 },
+        { header: 'Statut', key: 'statut', width: 12 },
+        { header: 'Dernier retour', key: 'dernierRetour', width: 16 },
+        { header: 'Motif', key: 'motif', width: 16 },
+        { header: 'Précision', key: 'precision', width: 30 },
+        { header: 'Le', key: 'dernierRetourLe', width: 12 },
+        { header: 'Premier vu', key: 'premierVu', width: 12 },
+        { header: 'Dernier vu', key: 'dernierVu', width: 12 },
+        { header: 'Jours vus', key: 'joursVus', width: 10 },
+        { header: 'Clôturé le', key: 'clotureLe', width: 12 },
+        { header: 'Envoyé le (WhatsApp)', key: 'envoye', width: 16 },
+        { header: 'Historique', key: 'historique', width: 50 },
+      ];
+      ws.columns = colonnes;
+      ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: colonnes.length } };
+
+      const entete = ws.getRow(1);
+      entete.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      entete.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F1B3D' } };
+      entete.alignment = { vertical: 'middle' };
+      entete.height = 20;
+
+      const FOND = { fait: 'FFEAFAF1', planifie: 'FFEAF3FA', blocage: 'FFFEF2F2', clos: 'FFF5F7FA' };
+      const TEXTE = { fait: 'FF00753A', planifie: 'FF0070C0', blocage: 'FFC0392B', clos: 'FF556677' };
+
+      for (const ligne of lignesExportBase(tousLesTickets)) {
+        const { cle, ...donnees } = ligne;
+        const row = ws.addRow(donnees);
+        if (FOND[cle]) {
+          row.eachCell({ includeEmpty: true }, (cell) => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: FOND[cle] } };
+          });
+        }
+        if (TEXTE[cle]) row.getCell('statut').font = { bold: true, color: { argb: TEXTE[cle] } };
+        row.getCell('ref').font = { bold: true };
+        const nLignes = donnees.historique ? donnees.historique.split('\n').length : 1;
+        row.getCell('historique').alignment = { wrapText: true, vertical: 'top' };
+        row.height = Math.max(row.height || 15, nLignes * 14);
+      }
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `base_complete_${today()}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExportBaseEnCours(false);
+    }
+  }
+
   function reassignJob(job, newTech) {
     const next = { ...assign };
     const refs = job.tickets.map((t) => t.ref);
@@ -562,6 +636,9 @@ export default function Dashboard() {
             )}
             <button style={{ ...S.btnAdd, marginLeft: 'auto' }} onClick={exporterExcel}>
               ⬇ Exporter (Excel)
+            </button>
+            <button style={S.btnGhost} onClick={exporterBaseComplete} disabled={exportBaseEnCours}>
+              {exportBaseEnCours ? '⏳ Export…' : '⬇ Exporter toute la base'}
             </button>
           </div>
         )}

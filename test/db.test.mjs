@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   useSqlClient, getSettings, saveSettings, saveUpload, getDay, assignTickets, getHistory,
   setStatut, getAvancement, getEcarts, planifier, arbitrer, getHistoriqueTickets, marquerEnvoye,
-  rechercheGlobale, rouvrirTicket, updateContact,
+  rechercheGlobale, rouvrirTicket, updateContact, listerTousLesTickets,
 } from '../lib/db.js';
 import { DEFAULT_TECHS, DEFAULT_ZONES, DEFAULT_CHEFS, buildJobs } from '../lib/dispatch.js';
 
@@ -509,6 +509,16 @@ assert.equal(dComplet.closed, 1, 'clore=true explicite : R980 absent est bien cl
 const j2703 = await getDay('2027-01-03');
 assert.equal(j2703.tickets.find((t) => t.ref === 'R980'), undefined, 'R980 clôturé ne revient plus dans le dispatch actif');
 ok('clore=true explicite conserve l\'ancien comportement quand le fichier est bien la liste complète du reste à faire');
+
+console.log('\n── Export "toute la base" (au-delà du dispatch du jour affiché) ──');
+const toute = await listerTousLesTickets();
+const r980Base = toute.find((t) => t.ref === 'R980');
+const r981Base = toute.find((t) => t.ref === 'R981');
+assert.ok(r980Base, 'R980 (clôturé, absent du dispatch du 2027-01-03) reste retrouvable dans "toute la base"');
+assert.equal(r980Base.status, 'clos');
+assert.ok(r981Base, 'R981 (toujours ouvert) est aussi présent');
+assert.equal(r981Base.contact, '0699999999', 'la correction de contact est exposée aussi dans cet export');
+ok('listerTousLesTickets retrouve un ticket clôturé même quand il a disparu du dispatch du jour affiché');
 
 await pg.close();
 console.log(`\n✅ ${pass} groupes de vérifications passés — la couche base est saine.\n`);

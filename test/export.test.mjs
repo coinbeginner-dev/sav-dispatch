@@ -1,7 +1,7 @@
 // Construction des lignes d'export (couleurs + libellés), sans Excel ni DOM.
 // Lancer avec : npm run test:export
 import assert from 'node:assert/strict';
-import { statutCouleur, ligneExport, lignesExport } from '../lib/export.js';
+import { statutCouleur, ligneExport, lignesExport, ligneExportBase, lignesExportBase } from '../lib/export.js';
 
 let pass = 0;
 const ok = (l) => { pass++; console.log(`  ✓ ${l}`); };
@@ -116,5 +116,56 @@ assert.equal(lignesSplitter[1].ticketsLies, 2);
 assert.equal(lignesSplitter[2].splitter, '', 'ticket sans splitter -> colonne vide');
 assert.equal(lignesSplitter[2].ticketsLies, '', 'seul dans son groupe -> pas de compte affiché');
 ok('la colonne Splitter + Tickets liés identifie les tickets résolus par une seule intervention');
+
+console.log('\n── Export "toute la base" (pas seulement le dispatch du jour) ──');
+const TB = (over = {}) => ({
+  ref: 'R900', client: 'CLIENT BASE', contact: '0600', contact_manual: false,
+  msan: 'MNOC-TAOUZAR', assigned_tech: 'RACHID', status: 'ouvert',
+  first_seen: '2026-08-01', last_seen: '2026-08-05', days_seen: 3, closed_on: null,
+  envoye_le: null, splitter: null, dernierStatut: null, historique: [], ...over,
+});
+
+const ouvertSansStatut = ligneExportBase(TB());
+assert.equal(ouvertSansStatut.statut, 'Ouvert');
+assert.equal(ouvertSansStatut.dernierRetour, '', 'jamais renseigné -> vide, pas de crash');
+assert.equal(ouvertSansStatut.premierVu, '2026-08-01');
+assert.equal(ouvertSansStatut.joursVus, 3);
+assert.equal(ouvertSansStatut.cle, 'vert');
+ok('ticket ouvert sans aucun retour terrain : statut Ouvert, colonnes vides sans crash');
+
+const contactCorrige = ligneExportBase(TB({ contact_manual: true }));
+assert.match(contactCorrige.contact, /\(corrigé\)/, 'le contact corrigé à la main est signalé, comme sur les cartes');
+ok('contact_manual ajoute la mention "(corrigé)" dans l\'export base');
+
+const closAvecMotif = ligneExportBase(TB({
+  status: 'clos', closed_on: '2026-08-10',
+  dernierStatut: { statut: 'clos', motif: 'Doublon avec R899', texte: null, day: '2026-08-09' },
+}));
+assert.equal(closAvecMotif.statut, 'Clôturé');
+assert.equal(closAvecMotif.dernierRetour, 'Clos');
+assert.equal(closAvecMotif.motif, 'Doublon avec R899');
+assert.equal(closAvecMotif.clotureLe, '2026-08-10');
+assert.equal(closAvecMotif.cle, 'clos');
+ok('ticket clos : statut Clôturé, motif et date de clôture exposés, couleur clos');
+
+const encoreOuvertNonVu = ligneExportBase(TB({
+  dernierStatut: { statut: 'blocage', motif: 'Numéro injoignable', texte: null, day: '2026-08-04' },
+}));
+assert.equal(encoreOuvertNonVu.statut, 'Ouvert', 'un ticket bloqué mais jamais formellement clos reste "Ouvert"');
+assert.equal(encoreOuvertNonVu.dernierRetour, 'Blocage');
+assert.equal(encoreOuvertNonVu.cle, 'blocage');
+ok('ticket encore ouvert, absent du dispatch du jour, reste retrouvable avec son dernier statut connu (blocage)');
+
+const avecHistoriqueBase = ligneExportBase(TB({
+  historique: [{ le: '05/08 09:00', statut: 'fait', motif: null, texte: null, source: 'chef' }],
+}));
+assert.match(avecHistoriqueBase.historique, /05\/08 09:00 · Fait/);
+ok('historique complet exposé dans l\'export base, comme dans l\'export du jour');
+
+const plusieurs = lignesExportBase([TB({ ref: 'R1' }), TB({ ref: 'R2', status: 'clos' })]);
+assert.equal(plusieurs.length, 2);
+assert.equal(plusieurs[0].ref, 'R1');
+assert.equal(plusieurs[1].statut, 'Clôturé');
+ok('lignesExportBase traite plusieurs tickets et préserve l\'ordre');
 
 console.log(`\n✅ ${pass} groupes de vérifications passés — export prêt.\n`);

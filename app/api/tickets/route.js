@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import {
   hasDb, getDay, saveUpload, assignTickets, setStatut, getAvancement, arbitrer,
   getDernierJourAvecTickets, marquerEnvoye, rechercheGlobale, rouvrirTicket, updateContact,
+  listerTousLesTickets,
 } from '../../../lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -22,6 +23,9 @@ export async function GET(req) {
     const terme = url.searchParams.get('recherche');
     if (terme) {
       return NextResponse.json({ db: true, resultats: await rechercheGlobale(terme) });
+    }
+    if (url.searchParams.get('tout')) {
+      return NextResponse.json({ db: true, resultats: await listerTousLesTickets() });
     }
     const demande = url.searchParams.get('day') || today();
     let jour = demande;
