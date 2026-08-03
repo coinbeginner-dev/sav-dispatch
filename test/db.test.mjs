@@ -510,6 +510,26 @@ const j2703 = await getDay('2027-01-03');
 assert.equal(j2703.tickets.find((t) => t.ref === 'R980'), undefined, 'R980 clôturé ne revient plus dans le dispatch actif');
 ok('clore=true explicite conserve l\'ancien comportement quand le fichier est bien la liste complète du reste à faire');
 
+console.log('\n── clore=true corrige aussi un envoi précédent du même jour sans clore ──');
+// Nettoyage : R981 (encore ouvert depuis la section précédente) ne doit pas
+// polluer les compteurs de cette section.
+await saveUpload('2027-01-04', [], { clore: true });
+await saveUpload('2027-01-04', [T('R990', 'MNOC-TAOUZAR', 1.0), T('R991', 'GA-C-COLLINE-1', 1.0)]);
+// Un premier envoi du 2027-01-05, sans cocher la case : R990 (absent de cet
+// extrait) est reconduit tel quel dans le dispatch du jour, comme prévu.
+const premierEnvoi = await saveUpload('2027-01-05', [T('R991', 'GA-C-COLLINE-1', 2.0)]);
+assert.equal(premierEnvoi.tickets.length, 2, 'R990 reconduit + R991 du fichier');
+
+// Un second envoi, PLUS TARD LE MÊME JOUR, cette fois avec la case cochée :
+// R990 doit être clôturé ET disparaître du dispatch du jour — pas juste
+// clôturé côté base pendant qu'une ligne du jour, laissée par le premier
+// envoi non coché, continue à l'afficher.
+const secondEnvoi = await saveUpload('2027-01-05', [T('R991', 'GA-C-COLLINE-1', 2.5)], { clore: true });
+assert.equal(secondEnvoi.closed, 1, 'R990 est bien clôturé');
+assert.equal(secondEnvoi.tickets.length, 1, 'le dispatch du jour ne montre plus que R991 : la ligne laissée par le premier envoi non coché a été retirée');
+assert.equal(secondEnvoi.tickets[0].ref, 'R991');
+ok('un second envoi coché "liste complète" le même jour nettoie aussi ce qu\'un envoi précédent (non coché) avait reconduit');
+
 console.log('\n── Export "toute la base" (au-delà du dispatch du jour affiché) ──');
 const toute = await listerTousLesTickets();
 const r980Base = toute.find((t) => t.ref === 'R980');
