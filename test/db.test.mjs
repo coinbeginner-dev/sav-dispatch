@@ -446,6 +446,8 @@ assert.equal(parRef.length, 1);
 assert.equal(parRef[0].ref, 'R960');
 assert.equal(parRef[0].dernierStatut.statut, 'fait', 'le dernier statut connu est retrouve meme si le ticket a disparu des fichiers');
 assert.ok(parRef[0].historique.length >= 1, 'historique complet expose');
+assert.equal(parRef[0].historique.length, 1,
+  'un "Fait" deja confirme par un technicien n\'est pas noye sous une note de cloture automatique redondante');
 ok('rechercheGlobale retrouve un ticket par ref, avec son dernier statut et son historique, meme hors du jour affiche');
 
 const parClient = await rechercheGlobale('recherche test');
@@ -529,6 +531,18 @@ assert.equal(secondEnvoi.closed, 1, 'R990 est bien clôturé');
 assert.equal(secondEnvoi.tickets.length, 1, 'le dispatch du jour ne montre plus que R991 : la ligne laissée par le premier envoi non coché a été retirée');
 assert.equal(secondEnvoi.tickets[0].ref, 'R991');
 ok('un second envoi coché "liste complète" le même jour nettoie aussi ce qu\'un envoi précédent (non coché) avait reconduit');
+
+// R990 n'a JAMAIS eu de statut posé par un technicien avant sa clôture par
+// absence : sans trace, il apparaîtrait "Clôturé" avec un historique vide,
+// impossible à distinguer d'une intervention réellement terminée.
+const r990Historique = await getHistoriqueTickets(['R990']);
+assert.equal(r990Historique.R990.length, 1, 'une note de clôture automatique est ajoutée');
+assert.equal(r990Historique.R990[0].statut, 'clos');
+assert.equal(r990Historique.R990[0].source, 'systeme', 'distincte d\'un retour terrain ou d\'une décision orienteur');
+assert.match(r990Historique.R990[0].motif, /absent du fichier déclaré complet/i);
+const r990Recherche = (await rechercheGlobale('R990'))[0];
+assert.equal(r990Recherche.dernierStatut.statut, 'clos', 'rechercheGlobale expose aussi cette clôture automatique, plus de "Dernier retour" vide');
+ok('un ticket jamais confirmé par un technicien reçoit une note de clôture automatique explicite à sa clôture par absence');
 
 console.log('\n── Export "toute la base" (au-delà du dispatch du jour affiché) ──');
 const toute = await listerTousLesTickets();
